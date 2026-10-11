@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --volt-green: #00F5A0;
+  --volt-cyan: #00D2FF;
+  --volt-danger: #FF3B30;
+  --volt-warning: #FF9500;
+  --volt-dark: #0A0E17;
+  --volt-card: #121826;
+  --volt-border: #1F293D;
+}
+
+html, body {
+  background-color: var(--volt-dark);
+  color: #E2E8F0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  overflow-x: hidden;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--volt-dark);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--volt-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2D3A52;
+}
+
+/* Glow Animations */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(0, 245, 160, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(0, 245, 160, 0.6); }
+}
+@keyframes pulse-danger {
+  0%, 100% { box-shadow: 0 0 8px rgba(255, 59, 48, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(255, 59, 48, 0.7); }
+}
+@keyframes pulse-warning {
+  0%, 100% { box-shadow: 0 0 8px rgba(255, 149, 0, 0.3); }
+  50% { box-shadow: 0 0 18px rgba(255, 149, 0, 0.6); }
+}
+@keyframes scan-line {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2.5s ease-in-out infinite;
+}
+.animate-pulse-danger {
+  animation: pulse-danger 1.2s ease-in-out infinite;
+}
+.animate-pulse-warning {
+  animation: pulse-warning 1.8s ease-in-out infinite;
+}
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}
+
+/* Gauge styling */
+.gauge-ring {
+  transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Map container */
+.maplibregl-map {
+  font-family: inherit;
+}
+.maplibregl-popup-content {
+  background: var(--volt-card) !important;
+  color: #E2E8F0 !important;
+  border: 1px solid var(--volt-border) !important;
+  border-radius: 8px !important;
+  padding: 12px !important;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5) !important;
+}
+.maplibregl-popup-tip {
+  border-top-color: var(--volt-card) !important;
+}
+
+/* Telemetry terminal */
+.terminal-feed {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+}
+
+/* Slider styling */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--volt-border);
+  outline: none;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--volt-green);
+  cursor: pointer;
+  border: 2px solid var(--volt-dark);
+  box-shadow: 0 0 8px rgba(0, 245, 160, 0.4);
+}
+input[type='range']::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--volt-green);
+  cursor: pointer;
+  border: 2px solid var(--volt-dark);
+}
+
+/* Card hover */
+.volt-card {
+  background: var(--volt-card);
+  border: 1px solid var(--volt-border);
+  border-radius: 12px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.volt-card:hover {
+  border-color: rgba(0, 245, 160, 0.3);
+  box-shadow: 0 0 16px rgba(0, 245, 160, 0.08);
+}
