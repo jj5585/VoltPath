@@ -295,32 +295,47 @@ export default function MapDeck({
 
     let vLat = activeSegments[0].lat;
     let vLng = activeSegments[0].lng;
+    let heading = 0;
 
     if (activePoly && activePoly.length > 0) {
       const polyIdx = Math.min(activePoly.length - 1, Math.max(0, currentPlaybackIndex));
       vLat = activePoly[polyIdx][0];
       vLng = activePoly[polyIdx][1];
+
+      if (polyIdx > 0) {
+        const prev = activePoly[polyIdx - 1];
+        heading = (Math.atan2(vLng - prev[1], vLat - prev[0]) * (180 / Math.PI) + 360) % 360;
+      } else if (activePoly.length > 1) {
+        const next = activePoly[1];
+        heading = (Math.atan2(next[1] - vLng, next[0] - vLat) * (180 / Math.PI) + 360) % 360;
+      }
     } else {
       const idx = Math.min(activeSegments.length - 1, Math.max(0, currentPlaybackIndex));
       vLat = activeSegments[idx].lat;
       vLng = activeSegments[idx].lng;
+      if (idx > 0) {
+        const prev = activeSegments[idx - 1];
+        heading = (Math.atan2(vLng - prev.lng, vLat - prev.lat) * (180 / Math.PI) + 360) % 360;
+      }
     }
+
+    const themeColor = activeRoute === 'A' ? '#EF4444' : '#00F5A0';
+    const shadowColor = activeRoute === 'A' ? 'rgba(239,68,68,0.85)' : 'rgba(0,245,160,0.85)';
+
+    const createMarkerHtml = (rot: number, col: string) => `
+      <div style="width:34px;height:34px;border-radius:50%;background:#0A0E17;border:2.5px solid ${col};box-shadow:0 0 16px ${shadowColor};display:flex;align-items:center;justify-content:center;position:relative;cursor:pointer;">
+        <div class="dispatch-arrow" style="width:20px;height:20px;display:flex;align-items:center;justify-content:center;transform:rotate(${rot}deg);transition:transform 0.12s ease-out;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="${col}" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round">
+            <path d="M12 2L19 21L12 17L5 21L12 2Z" />
+          </svg>
+        </div>
+      </div>
+    `;
 
     if (!markerRef.current) {
       const el = document.createElement('div');
-      el.style.width = '32px';
-      el.style.height = '32px';
-      el.style.borderRadius = '50%';
-      el.style.background = activeRoute === 'A' ? '#EF4444' : '#00F5A0';
-      el.style.border = '3px solid #0A0E17';
-      el.style.boxShadow =
-        activeRoute === 'A' ? '0 0 16px rgba(239,68,68,0.8)' : '0 0 16px rgba(0,245,160,0.8)';
-      el.style.cursor = 'pointer';
-      el.style.display = 'flex';
-      el.style.alignItems = 'center';
-      el.style.justifyContent = 'center';
-      el.style.transition = 'transform 0.1s linear';
-      el.innerHTML = '<span style="font-size:16px">🛵</span>';
+      el.className = 'voltpath-vehicle-marker';
+      el.innerHTML = createMarkerHtml(heading, themeColor);
 
       markerRef.current = new maplibregl.Marker({ element: el })
         .setLngLat([vLng, vLat])
@@ -328,9 +343,7 @@ export default function MapDeck({
     } else {
       markerRef.current.setLngLat([vLng, vLat]);
       const el = markerRef.current.getElement();
-      el.style.background = activeRoute === 'A' ? '#EF4444' : '#00F5A0';
-      el.style.boxShadow =
-        activeRoute === 'A' ? '0 0 16px rgba(239,68,68,0.8)' : '0 0 16px rgba(0,245,160,0.8)';
+      el.innerHTML = createMarkerHtml(heading, themeColor);
     }
   }, [mapLoaded, currentPlaybackIndex, activeRoute, routeASegments, routeBSegments, fullPolylineA, fullPolylineB]);
 

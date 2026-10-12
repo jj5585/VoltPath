@@ -398,30 +398,52 @@ export default function GoogleMapDeck({
 
     let vLat = activeSegments[0].lat;
     let vLng = activeSegments[0].lng;
+    let heading = 0;
 
     if (activePoly && activePoly.length > 0) {
       const polyIdx = Math.min(activePoly.length - 1, Math.max(0, currentPlaybackIndex));
       vLat = activePoly[polyIdx][0];
       vLng = activePoly[polyIdx][1];
+
+      if (polyIdx > 0) {
+        const prev = activePoly[polyIdx - 1];
+        heading = (Math.atan2(vLng - prev[1], vLat - prev[0]) * (180 / Math.PI) + 360) % 360;
+      } else if (activePoly.length > 1) {
+        const next = activePoly[1];
+        heading = (Math.atan2(next[1] - vLng, next[0] - vLat) * (180 / Math.PI) + 360) % 360;
+      }
     } else {
       const idx = Math.min(activeSegments.length - 1, Math.max(0, currentPlaybackIndex));
       vLat = activeSegments[idx].lat;
       vLng = activeSegments[idx].lng;
+      if (idx > 0) {
+        const prev = activeSegments[idx - 1];
+        heading = (Math.atan2(vLng - prev.lng, vLat - prev.lat) * (180 / Math.PI) + 360) % 360;
+      }
     }
+
+    const themeColor = activeRoute === 'A' ? '#EF4444' : '#00F5A0';
+    const markerIcon = {
+      path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+      scale: 5,
+      fillColor: themeColor,
+      fillOpacity: 1,
+      strokeColor: '#0A0E17',
+      strokeWeight: 2,
+      rotation: Math.round(heading),
+    };
 
     if (!vehicleMarkerRef.current) {
       const vMarker = new google.maps.Marker({
         position: { lat: vLat, lng: vLng },
         map,
-        title: 'Vehicle Tracking',
-        label: {
-          text: '🛵',
-          fontSize: '18px',
-        },
+        title: 'VoltPath Dispatch Vehicle',
+        icon: markerIcon,
       });
       vehicleMarkerRef.current = vMarker;
     } else {
       vehicleMarkerRef.current.setPosition({ lat: vLat, lng: vLng });
+      vehicleMarkerRef.current.setIcon(markerIcon);
     }
   }, [scriptLoaded, currentPlaybackIndex, activeRoute, routeASegments, routeBSegments, fullPolylineA, fullPolylineB]);
 
