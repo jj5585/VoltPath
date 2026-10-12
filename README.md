@@ -1,25 +1,24 @@
-# VoltPath ⚡
+# VoltPath 2.0 ⚡
 
 > **Physics-informed thermal and terrain energy intelligence for commercial Indian 2W EV delivery fleets.**
 
 Real-world range for commercial 2-wheeler EVs (e.g., Zepto, Blinkit, Zomato, Swiggy Instamart) collapses by up to **40%** under extreme operating conditions: **42°C+ summer heatwaves**, **120kg grocery payloads**, and **rough/graded roads with flyovers**.
 
-Standard flat-earth GPS routing treats distance as the sole metric, dispatching riders on shortest-distance paths that induce severe battery thermal throttling, deep discharge stalls, and roadside breakdown costs. **VoltPath** replaces naive routing with a physics-based, energy-optimal dispatch engine.
+Standard flat-earth GPS routing treats distance as the sole metric, dispatching riders on shortest-distance paths that induce severe battery thermal throttling, deep discharge stalls, and roadside breakdown costs. **VoltPath** replaces naive routing with a physics-grounded, energy-optimal dispatch engine.
 
 ---
 
-## 🚀 Key Features
+## 🚀 VoltPath 2.0 Upgrades & Architecture
 
-- **Tractive Force Dynamics**: Calculates rolling resistance ($C_{rr}$ adjusted for smooth vs potholed roads), aerodynamic drag (with temperature-dependent air density), terrain gradient force, and inertial stop-and-go acceleration forces.
-- **Arrhenius Thermal Modeling**: Simulates non-linear cell internal resistance surges above 40°C, pack Joule heating ($I^2 R$), convective heat dissipation, and triggers BMS thermal derating warnings at 45°C.
-- **Split Route Comparison**:
-  - **Route A ("Standard Flat Route")**: Naive shortest distance via Domlur flyover ramp (+7.8% grade) and broken pavement; shows severe thermal spike to 46.8°C and a simulated deep-discharge stall alert (<12% SoC) at km 7.4.
-  - **Route B ("VoltPath Energy-Aware Route")**: Grade-mitigated arterial path via Old Airport Road through shaded tree canopies, smooth tarmac, and regenerative descent; arrives safely with 24% SoC remaining.
-- **Dynamic Safe-Reach Contour (Isochrone)**: Generates an irregular 24-sector polygon around the vehicle reflecting true directional reach based on remaining battery SoC, ambient heat, payload mass, and terrain slope.
-- **Battery Swap Station Integration**: Displays real-time swap stations (Battery Smart, Sun Mobility, Ather Grid) with bay availability and swap durations before riders enter deep discharge.
-- **AIS-140 CAN-Bus Telemetry Stream**: Simulates MoRTH-standard AIS-140 NMEA sentences with XOR checksums, paired with an interactive gauge cluster (Speed, Battery SoC, Pack Temp, Voltage, Current) and raw hex terminal stream.
-- **Interactive Trip Simulation**: Play, pause, scrub timeline, and adjust playback speed (1x, 2x, 5x) with an animated vehicle tracking marker.
-- **Fleet ROI Metrics**: Computes monthly per-vehicle savings (**₹1,200/mo**) from avoiding roadside towings (₹800), battery thermal degradation (₹250), and delivery SLA delay penalties (₹150).
+- **Rigorous Longitudinal Tractive Force**: Standardized SI units calculating rolling resistance ($C_{rr}$ dynamically adjusted for smooth vs rough vs broken roads), aerodynamic drag (with temperature-dependent air density), terrain gradient force with numerical slope safeguards, and inertial stop-and-go acceleration.
+- **Realistic Energy Conservation & Regenerative Braking**: Bidirectional power flow modeling positive traction draw, auxiliary electrical loads (45W telematics/lights), kinetic energy recovery capped at motor/inverter acceptance limits (1500W), and internal cell Joule heating ($I^2 R$) during both discharge and charging.
+- **Numerical Safeguards for Elevation & Road Grade**: Safe grade derivation filtering noisy GPS jitter (< 2m horizontal distance) and clamping slopes to physically plausible urban 2W limits ([-25%, +25%]).
+- **Thermal Transient ODE**: Explicit numerical integration of pack temperature evolution with speed-dependent convective cooling airflow ($h_{\text{conv}}(v)$) and distinct BMS states for `NORMAL`, `THERMAL_THROTTLING` (>= 45°C), `LOW_SOC_WARNING` (<= 18%), and `CRITICAL_STALL` (<= 12% or >= 55°C).
+- **Multi-Factor Route Scoring & Decision Engine**: Evaluates energy efficiency, thermal peak, arrival reserve, and travel time with hard safety gating. Unsafe corridors are flagged immediately regardless of distance.
+- **Custom Scenario Configuration & Multi-Scenario Matrix**: Dispatchers can customize ambient temperature, cargo payload, rider mass, dispatch SoC, road roughness, auxiliary load, and traffic intensity, and compare all 4 standard shift presets side-by-side in a comparison matrix.
+- **Defensible Fleet ROI Calculator**: Transparent economic model with configurable fleet size, trips/day, commercial electricity tariff (₹8.50/kWh), towing rescue costs, battery cell degradation preservation, and SLA delay penalties.
+- **AIS-140-Inspired Telemetry (Simulated)**: NMEA-style framing with validated 8-bit XOR checksums, live gauges (Speed, SoC, Temp, Voltage, Current, Power kW, Range km), and interactive packet log inspector.
+- **Automated Test Suite**: Built-in 15 automated physics, routing, and telemetry verification tests (`npm test`).
 
 ---
 
@@ -222,3 +221,21 @@ VoltPath now connects directly to live map routing services to pull **actual str
    - Automatically falls back to the OpenStreetMap road network if the Google API key is absent or restricted, guaranteeing 100% road-accurate coverage.
 3. **Real Street Elevation Profiling**:
    - Every waypoint along the real street path is cross-referenced with satellite terrain elevation to compute true road gradients ($\Delta h / \Delta d_{\text{road}}$), regenerative downhill segments, and flyover climb penalties.
+
+---
+
+## 🧪 Testing & Execution Commands
+
+```bash
+# Run automated physics, routing, and telemetry verification tests (15 unit tests)
+npm test
+
+# Run development server with hot reloading
+npm run dev
+
+# Compile production build
+npm run build
+
+# Start production server
+npm start
+```

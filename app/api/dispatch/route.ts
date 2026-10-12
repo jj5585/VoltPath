@@ -13,9 +13,9 @@ import {
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const vehicleId = searchParams.get('vehicleId') || 'ather-450x';
-  const ambientTempC = parseFloat(searchParams.get('ambientTempC') || '42');
-  const payloadKg = parseFloat(searchParams.get('payloadKg') || '120');
-  const startSocPct = parseFloat(searchParams.get('startSocPct') || '55');
+  const ambientTempC = Math.max(10, Math.min(55, parseFloat(searchParams.get('ambientTempC') || '42')));
+  const payloadKg = Math.max(0, Math.min(150, parseFloat(searchParams.get('payloadKg') || '120')));
+  const startSocPct = Math.max(15, Math.min(100, parseFloat(searchParams.get('startSocPct') || '55')));
   const sourceId = searchParams.get('sourceId');
   const destinationId = searchParams.get('destinationId');
 
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
     const dynamicPair = generateDynamicRoutePair(src, dst);
     corridor = {
       id: `${src.id}-to-${dst.id}`,
-      regionName: `${src.city === 'bengaluru' ? 'Bengaluru' : 'Delhi'} Urban Corridor`,
+      regionName: `${src.city === 'bengaluru' ? 'Bengaluru' : src.city === 'delhi_ncr' ? 'Delhi NCR' : 'Mumbai'} Urban Corridor`,
       hubName: src.name,
       destinationName: dst.name,
       defaultAmbientTempC: ambientTempC,
@@ -38,33 +38,29 @@ export async function GET(request: NextRequest) {
     corridor = DELIVERY_CORRIDORS.bengaluru;
   }
 
-  // Calculate Route A (Standard Flat Route)
-  const routeAResult = computeRoutePhysics(
-    corridor.routeA.waypoints,
-    vehicle,
+  // Calculate Route A (Standard Direct Route)
+  const routeAResult = computeRoutePhysics(corridor.routeA.waypoints, vehicle, {
     ambientTempC,
     payloadKg,
-    70,
-    startSocPct,
-    ambientTempC - 2,
-    corridor.routeA.id,
-    corridor.routeA.name
-  );
+    riderWeightKg: 70,
+    initialSocPct: startSocPct,
+    initialPackTempC: ambientTempC - 2,
+    routeId: corridor.routeA.id,
+    routeName: corridor.routeA.name,
+  });
 
   // Calculate Route B (VoltPath Energy-Aware Route)
-  const routeBResult = computeRoutePhysics(
-    corridor.routeB.waypoints,
-    vehicle,
-    ambientTempC - 1.5,
+  const routeBResult = computeRoutePhysics(corridor.routeB.waypoints, vehicle, {
+    ambientTempC: ambientTempC - 1.5,
     payloadKg,
-    70,
-    startSocPct,
-    ambientTempC - 3,
-    corridor.routeB.id,
-    corridor.routeB.name
-  );
+    riderWeightKg: 70,
+    initialSocPct: startSocPct,
+    initialPackTempC: ambientTempC - 3,
+    routeId: corridor.routeB.id,
+    routeName: corridor.routeB.name,
+  });
 
-  // Calculate Safe-Reach Isochrone Polygon centered on origin
+  // Calculate Safe-Reach Polygon centered on origin
   const origin = corridor.routeA.waypoints[0];
   const safeReachPolygon = generateSafeReachPolygon(
     origin.lat,
@@ -76,6 +72,7 @@ export async function GET(request: NextRequest) {
   );
 
   return NextResponse.json({
+    status: 'success',
     timestamp: new Date().toISOString(),
     corridor,
     vehicle,
@@ -96,11 +93,15 @@ export async function GET(request: NextRequest) {
       distanceDeltaKm: parseFloat((routeBResult.totalDistanceKm - routeAResult.totalDistanceKm).toFixed(2)),
       energySavedKwh: parseFloat((routeAResult.totalEnergyKwh - routeBResult.totalEnergyKwh).toFixed(3)),
       energySavedPct: parseFloat(
-        (((routeAResult.totalEnergyKwh - routeBResult.totalEnergyKwh) / routeAResult.totalEnergyKwh) * 100).toFixed(1)
+        routeAResult.totalEnergyKwh > 0
+          ? (((routeAResult.totalEnergyKwh - routeBResult.totalEnergyKwh) / routeAResult.totalEnergyKwh) * 100).toFixed(1)
+          : '0'
       ),
       endSocDeltaPct: parseFloat((routeBResult.endSocPct - routeAResult.endSocPct).toFixed(1)),
       tempReductionC: parseFloat((routeAResult.peakPackTempC - routeBResult.peakPackTempC).toFixed(1)),
-      monthlyFleetSavingsInr: routeAResult.financialSavingsInrMonth,
+      monthlyFleetSavingsInr: Math.max(0, routeAResult.operatingCostEstimate.monthlyPerVehicleInr - routeBResult.operatingCostEstimate.monthlyPerVehicleInr),
+      routeScoreA: routeAResult.routeScore,
+      routeScoreB: routeBResult.routeScore,
     },
   });
 }

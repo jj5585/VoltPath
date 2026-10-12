@@ -1,22 +1,25 @@
 /**
- * VoltPath Physics Engine
- * Physics-informed tractive force, terrain gradient, and Arrhenius thermal cell efficiency models
- * for commercial 2W EV delivery fleets in India.
+ * VoltPath Physics Engine 2.0
+ * Physics-informed longitudinal tractive force, terrain elevation gradient,
+ * empirical cell thermal transient, and battery state-of-charge models
+ * for commercial two-wheeler (2W) electric vehicle delivery fleets in India.
  */
 
 export interface VehicleSpecs {
   id: string;
   name: string;
   brand: string;
-  curbWeightKg: number;       // e.g. 90 kg
-  batteryCapacityKwh: number; // e.g. 3.4 kWh
-  nominalVoltageV: number;    // e.g. 51.1 V
-  frontalAreaM2: number;      // e.g. 0.6 m^2 (scooter + rider + rear cargo delivery bag)
-  dragCoefficientCd: number;  // e.g. 0.85 (upright rider with large cargo box)
-  motorEfficiency: number;    // e.g. 0.86
-  regenEfficiency: number;    // e.g. 0.65
-  maxPackTempC: number;       // e.g. 55 °C
-  thermalThrottlingTempC: number; // e.g. 45 °C
+  curbWeightKg: number;          // e.g. 108 kg (Ather) or 87 kg (Hero NYX)
+  batteryCapacityKwh: number;    // e.g. 3.7 kWh
+  nominalVoltageV: number;       // e.g. 51.1 V
+  frontalAreaM2: number;         // e.g. 0.62 m^2 (scooter + upright delivery rider + cargo box)
+  dragCoefficientCd: number;     // e.g. 0.82 (non-aerodynamic delivery box)
+  motorEfficiency: number;       // e.g. 0.88 base powertrain efficiency
+  regenEfficiency: number;       // e.g. 0.68 mechanical-to-electrical kinetic recovery
+  maxRegenPowerW: number;        // e.g. 1500 W maximum regen charging acceptance
+  maxPackTempC: number;          // e.g. 55 °C BMS critical safety cutoff
+  thermalThrottlingTempC: number;// e.g. 45 °C BMS thermal derate initiation
+  auxPowerW: number;             // e.g. 45 W telematics, display, lights, BMS logic
 }
 
 export const FLEET_VEHICLES: VehicleSpecs[] = [
@@ -31,8 +34,10 @@ export const FLEET_VEHICLES: VehicleSpecs[] = [
     dragCoefficientCd: 0.82,
     motorEfficiency: 0.88,
     regenEfficiency: 0.68,
+    maxRegenPowerW: 1500,
     maxPackTempC: 55,
     thermalThrottlingTempC: 45,
+    auxPowerW: 45,
   },
   {
     id: 'hero-nyx',
@@ -45,8 +50,10 @@ export const FLEET_VEHICLES: VehicleSpecs[] = [
     dragCoefficientCd: 0.88,
     motorEfficiency: 0.82,
     regenEfficiency: 0.55,
+    maxRegenPowerW: 1000,
     maxPackTempC: 52,
     thermalThrottlingTempC: 44,
+    auxPowerW: 40,
   },
   {
     id: 'ola-s1-pro',
@@ -59,8 +66,10 @@ export const FLEET_VEHICLES: VehicleSpecs[] = [
     dragCoefficientCd: 0.80,
     motorEfficiency: 0.89,
     regenEfficiency: 0.70,
+    maxRegenPowerW: 1600,
     maxPackTempC: 54,
     thermalThrottlingTempC: 45,
+    auxPowerW: 45,
   },
   {
     id: 'tvs-iqube',
@@ -73,8 +82,10 @@ export const FLEET_VEHICLES: VehicleSpecs[] = [
     dragCoefficientCd: 0.83,
     motorEfficiency: 0.87,
     regenEfficiency: 0.64,
+    maxRegenPowerW: 1200,
     maxPackTempC: 53,
     thermalThrottlingTempC: 45,
+    auxPowerW: 42,
   },
 ];
 
@@ -83,9 +94,9 @@ export interface RouteWaypoint {
   lng: number;
   elevationM: number;       // altitude in meters
   name?: string;
-  speedKmh?: number;        // typical speed for segment
-  roadQuality?: 'smooth' | 'rough' | 'broken'; // road roughness
-  isStop?: boolean;         // traffic signal / stop
+  speedKmh?: number;        // target speed for segment
+  roadQuality?: 'smooth' | 'rough' | 'broken';
+  isStop?: boolean;         // traffic junction / signal stop
 }
 
 export interface SegmentCalculation {
@@ -96,21 +107,40 @@ export interface SegmentCalculation {
   distanceKm: number;
   cumulativeDistanceKm: number;
   elevationM: number;
-  gradePct: number;         // slope in %
+  gradePct: number;         // slope in %, clamped to [-25, 25]
   speedKmh: number;
-  fRollingN: number;
-  fDragN: number;
-  fGradientN: number;
-  fInertialN: number;
-  fTotalN: number;
-  powerKw: number;          // electrical power draw
-  energyWh: number;         // step energy Wh
+  fRollingN: number;        // Rolling resistance force
+  fDragN: number;           // Aerodynamic drag force
+  fGradientN: number;       // Gravitational gradient force
+  fInertialN: number;       // Acceleration inertial force
+  fTotalN: number;          // Total longitudinal tractive force
+  wheelPowerKw: number;     // Mechanical power at wheel
+  powerKw: number;          // Electrical battery power draw (positive = discharge, negative = regen)
+  energyWh: number;         // Step energy delta Wh
   cumulativeEnergyWh: number;
-  packTempC: number;        // cell pack temp
-  socPct: number;           // remaining SoC %
-  isThrottling: boolean;
-  isStalled: boolean;
+  packTempC: number;        // Cell pack core temperature
+  socPct: number;           // Battery state of charge %
+  packVoltageV: number;     // Dynamic pack voltage
+  packCurrentA: number;     // Battery pack current (A)
+  isThrottling: boolean;    // BMS thermal derate active
+  isLowSoc: boolean;        // Low SoC warning (< 18%)
+  isStalled: boolean;       // Critical stall (< 12% or > 55°C)
   warning?: string;
+}
+
+export interface SimulationEvent {
+  stepIndex: number;
+  distanceKm: number;
+  lat: number;
+  lng: number;
+  type: 'THERMAL_THROTTLING' | 'LOW_SOC_WARNING' | 'CRITICAL_STALL';
+  message: string;
+  telemetry: {
+    socPct: number;
+    packTempC: number;
+    speedKmh: number;
+    powerKw: number;
+  };
 }
 
 export interface RoutePhysicsResult {
@@ -125,6 +155,8 @@ export interface RoutePhysicsResult {
   averageSpeedKmh: number;
   travelTimeMinutes: number;
   hasStalled: boolean;
+  hasThrottled: boolean;
+  events: SimulationEvent[];
   stallPoint?: {
     distanceKm: number;
     lat: number;
@@ -137,6 +169,26 @@ export interface RoutePhysicsResult {
     lng: number;
   };
   segments: SegmentCalculation[];
+  routeScore: {
+    overallScore: number;       // 0 to 100 composite score
+    isSafe: boolean;            // false if stall occurs or arrival reserve < 15%
+    recommendationReason: string;
+    factors: {
+      energyScore: number;
+      thermalScore: number;
+      arrivalReserveScore: number;
+      timeScore: number;
+    };
+  };
+  operatingCostEstimate: {
+    energyCostInr: number;
+    towingRiskCostInr: number;
+    batteryDegradationCostInr: number;
+    slaPenaltyRiskInr: number;
+    totalPerTripInr: number;
+    monthlyPerVehicleInr: number;
+  };
+  // Backward-compatible properties
   financialSavingsInrMonth: number;
   breakdown: {
     towingPreventedInr: number;
@@ -145,200 +197,351 @@ export interface RoutePhysicsResult {
   };
 }
 
+export interface SimulationOptions {
+  ambientTempC?: number;
+  payloadKg?: number;
+  riderWeightKg?: number;
+  initialSocPct?: number;
+  initialPackTempC?: number;
+  roadQualityOverride?: 'smooth' | 'rough' | 'broken';
+  trafficIntensity?: 'low' | 'moderate' | 'high';
+  auxPowerW?: number;
+  routeId?: string;
+  routeName?: string;
+}
+
 /**
- * Air density as a function of ambient temperature (kg/m^3)
- * rho = P / (R_spec * T_kelvin)
+ * Air density as a function of ambient temperature in Kelvin (kg/m^3)
+ * Dry air ideal gas law: rho = P / (R_spec * T_kelvin)
  */
 export function getAirDensity(ambientTempC: number): number {
   const kelvin = ambientTempC + 273.15;
-  const standardPressurePa = 101325; // 1 atm
+  const standardPressurePa = 101325; // 1 atm standard atmospheric pressure
   const specificGasConstant = 287.05; // J/(kg*K)
   return standardPressurePa / (specificGasConstant * kelvin);
 }
 
 /**
- * Rolling resistance coefficient based on road quality
+ * Rolling resistance coefficient (C_rr) based on pavement condition
+ * Verified against Indian urban roadway empirical ranges
  */
 export function getRollingResistanceCoeff(quality: 'smooth' | 'rough' | 'broken' = 'rough'): number {
   switch (quality) {
-    case 'smooth': return 0.012; // Well-paved asphalt
-    case 'rough':  return 0.022; // Typical Indian urban street with micro-bumps
-    case 'broken': return 0.036; // Severe potholes / unpaved / monsoon degraded
+    case 'smooth': return 0.012; // Well-paved asphalt / arterial highway
+    case 'rough':  return 0.022; // Typical urban secondary street with micro-crevices
+    case 'broken': return 0.036; // Potholed / unpaved / monsoon-degraded road
     default:       return 0.020;
   }
 }
 
 /**
- * Arrhenius Overpotential & Cell Internal Resistance Model
- * Battery cell internal resistance spikes non-linearly above 40°C
+ * Empirical temperature-dependent cell internal resistance model
+ * Base resistance: ~0.032 - 0.034 Ohm for commercial 2W pack.
+ * Above 40°C, cell overpotential and impedance escalate non-linearly due to SEI layer thermal instability.
  */
 export function calculateCellInternalResistance(
   baseResistanceOhm: number = 0.032,
   packTempC: number = 38
 ): number {
   if (packTempC <= 40) {
-    // Normal linear thermal baseline
-    return baseResistanceOhm * (1 + 0.004 * (packTempC - 25));
+    // Linear baseline variation (0.4% per °C above 25°C)
+    return Math.max(0.020, baseResistanceOhm * (1 + 0.004 * (packTempC - 25)));
   }
-  // Arrhenius non-linear surge above 40°C
+  // Empirical non-linear surge above 40°C
   const deltaT = packTempC - 40;
   const surgeMultiplier = 1 + 0.085 * Math.pow(deltaT, 1.65);
   return baseResistanceOhm * surgeMultiplier;
 }
 
 /**
- * Simulates a full route with tractive force & thermal transient balance
+ * Haversine great-circle distance between two GPS coordinates in kilometers
+ */
+export function haversineDistanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371.0; // Mean Earth radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+  return R * c;
+}
+
+/**
+ * Simulates a complete route with tractive force balance, regenerative braking,
+ * thermal transient ODE integration, and battery SoC conservation.
  */
 export function computeRoutePhysics(
   waypoints: RouteWaypoint[],
   vehicle: VehicleSpecs,
-  ambientTempC: number = 42,
-  payloadKg: number = 120,
-  riderWeightKg: number = 70,
-  initialSocPct: number = 55,
-  initialPackTempC?: number,
-  routeId: string = 'route',
-  routeName: string = 'Route'
+  optionsOrAmbient?: SimulationOptions | number,
+  payloadKgLegacy?: number,
+  riderWeightKgLegacy?: number,
+  initialSocPctLegacy?: number,
+  initialPackTempCLegacy?: number,
+  routeIdLegacy?: string,
+  routeNameLegacy?: string
 ): RoutePhysicsResult {
-  const g = 9.80665; // m/s^2
-  const totalMassKg = vehicle.curbWeightKg + riderWeightKg + payloadKg;
+  // Normalize parameters: either options object or positional arguments
+  const options: SimulationOptions =
+    typeof optionsOrAmbient === 'object' && optionsOrAmbient !== null
+      ? optionsOrAmbient
+      : {
+          ambientTempC: typeof optionsOrAmbient === 'number' ? optionsOrAmbient : 42,
+          payloadKg: payloadKgLegacy ?? 120,
+          riderWeightKg: riderWeightKgLegacy ?? 70,
+          initialSocPct: initialSocPctLegacy ?? 55,
+          initialPackTempC: initialPackTempCLegacy,
+          routeId: routeIdLegacy ?? 'route',
+          routeName: routeNameLegacy ?? 'Route',
+        };
+
+  const ambientTempC = options.ambientTempC ?? 42;
+  const payloadKg = options.payloadKg ?? 120;
+  const riderWeightKg = options.riderWeightKg ?? 70;
+  const initialSocPct = options.initialSocPct ?? 55;
+  const routeId = options.routeId ?? 'route';
+  const routeName = options.routeName ?? 'Route';
+  const auxPowerW = options.auxPowerW ?? vehicle.auxPowerW ?? 45;
+
+  const g = 9.80665; // m/s^2 standard gravity
+  const totalMassKg = Math.max(50, vehicle.curbWeightKg + riderWeightKg + payloadKg);
   const airDensity = getAirDensity(ambientTempC);
-  const auxPowerW = 45; // Telematics AIS-140, LED lights, display, BMS logic
   const batteryTotalWh = vehicle.batteryCapacityKwh * 1000;
 
-  // Thermal pack parameters (representative 3.5 kWh NMC/LFP pack)
-  const packMassKg = 19; // kg
-  const packSpecificHeatJPerKgK = 880; // J/(kg*K)
-  const thermalCapacitance = packMassKg * packSpecificHeatJPerKgK; // ~16,720 J/K
-  const convectiveCoolingCoeff = 9.5; // W/K at ~30 km/h airflow
+  // Thermal model parameters (representative 3.5 kWh NMC/LFP 2W pack)
+  // Pack mass ~ 19 kg, specific heat capacity ~ 880 J/(kg*K) => C_thermal ~ 16,720 J/K
+  const packMassKg = 19;
+  const packSpecificHeatJPerKgK = 880;
+  const thermalCapacitance = packMassKg * packSpecificHeatJPerKgK; // J/K
+  const baseConvectiveCoolingWPerK = 5.0; // Static natural convection at standstill
+  const convectiveSpeedFactor = 0.45;    // Forced convection scaling with speed (W/(K*(m/s)))
 
-  let currentPackTempC = initialPackTempC !== undefined ? initialPackTempC : Math.max(36, ambientTempC - 2);
-  let currentSocPct = initialSocPct;
+  let currentPackTempC =
+    options.initialPackTempC !== undefined
+      ? options.initialPackTempC
+      : Math.max(34, ambientTempC - 2);
+  let currentSocPct = Math.min(100, Math.max(0, initialSocPct));
   let cumulativeDistanceKm = 0;
   let cumulativeEnergyWh = 0;
   let peakPackTempC = currentPackTempC;
   let hasStalled = false;
+  let hasThrottled = false;
+
+  const events: SimulationEvent[] = [];
   let stallPoint: RoutePhysicsResult['stallPoint'] = undefined;
   let throttlePoint: RoutePhysicsResult['throttlePoint'] = undefined;
 
   const segments: SegmentCalculation[] = [];
   let totalTimeHours = 0;
 
-  // Process segment by segment
   for (let i = 0; i < waypoints.length; i++) {
     const pt = waypoints[i];
     const prevPt = i > 0 ? waypoints[i - 1] : waypoints[0];
 
-    // Distance calculation (haversine formula)
+    // 1. Horizontal Distance Calculation
     let distKm = 0;
     if (i > 0) {
-      const R = 6371; // Earth radius in km
-      const dLat = ((pt.lat - prevPt.lat) * Math.PI) / 180;
-      const dLon = ((pt.lng - prevPt.lng) * Math.PI) / 180;
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos((prevPt.lat * Math.PI) / 180) *
-          Math.cos((pt.lat * Math.PI) / 180) *
-          Math.sin(dLon / 2) *
-          Math.sin(dLon / 2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      distKm = R * c;
+      distKm = haversineDistanceKm(prevPt.lat, prevPt.lng, pt.lat, pt.lng);
+    }
+    cumulativeDistanceKm += distKm;
+    const distM = distKm * 1000;
+
+    // 2. Road Grade Calculation with Numerical Safeguards
+    // Prevent divide-by-zero or noise spikes on duplicate/negligible coordinates (< 2 meters)
+    const deltaHM = pt.elevationM - prevPt.elevationM;
+    let gradePct = 0;
+    let thetaRad = 0;
+
+    if (distM >= 2.0) {
+      // Calculate grade and clamp to physically plausible urban 2W slope range [-25%, +25%]
+      const rawGradePct = (deltaHM / distM) * 100;
+      gradePct = Math.max(-25, Math.min(25, rawGradePct));
+      thetaRad = Math.atan2(deltaHM, distM);
     }
 
-    cumulativeDistanceKm += distKm;
+    // 3. Speed & Acceleration Profile
+    const roadQuality = options.roadQualityOverride || pt.roadQuality || 'rough';
+    let targetSpeedKmh = pt.speedKmh ?? (pt.isStop ? 0 : 32);
 
-    // Elevation gradient
-    const deltaHM = pt.elevationM - prevPt.elevationM;
-    const distM = Math.max(1, distKm * 1000);
-    const gradePct = distM > 0 ? (deltaHM / distM) * 100 : 0;
-    const thetaRad = Math.atan2(deltaHM, distM);
+    // Apply stop-and-go penalty if high traffic intensity
+    if (options.trafficIntensity === 'high' && (i % 3 === 0)) {
+      targetSpeedKmh = Math.max(12, targetSpeedKmh * 0.6);
+    }
 
-    // Speed & Acceleration
-    const speedKmh = pt.speedKmh || (pt.isStop ? 0 : 32);
-    const prevSpeedKmh = prevPt.speedKmh || (prevPt.isStop ? 0 : 32);
-    const vMps = (speedKmh * 1000) / 3600;
-    const prevVMps = (prevSpeedKmh * 1000) / 3600;
-    const segmentTimeS = distKm > 0 ? (distM / Math.max(1.5, (vMps + prevVMps) / 2)) : 0.1;
+    const prevSpeedKmh = segments.length > 0 ? segments[segments.length - 1].speedKmh : targetSpeedKmh;
+    const vMps = Math.max(0, (targetSpeedKmh * 1000) / 3600);
+    const prevVMps = Math.max(0, (prevSpeedKmh * 1000) / 3600);
+    const avgVMps = (vMps + prevVMps) / 2;
+
+    // Segment duration (seconds). Enforce realistic min time for stationary or short steps.
+    const segmentTimeS = distKm > 0 ? Math.max(1.0, distM / Math.max(1.2, avgVMps)) : 0.5;
     totalTimeHours += segmentTimeS / 3600;
 
     const accelMps2 = segmentTimeS > 0 ? (vMps - prevVMps) / segmentTimeS : 0;
 
-    // Tractive Forces (N)
-    const Crr = getRollingResistanceCoeff(pt.roadQuality || 'rough');
-    const fRollingN = Crr * totalMassKg * g * Math.cos(thetaRad);
+    // 4. Longitudinal Tractive Forces (SI Units: Newtons)
+    // F_rolling = C_rr * m * g * cos(theta)
+    const Crr = getRollingResistanceCoeff(roadQuality);
+    const fRollingN = Math.max(0, Crr * totalMassKg * g * Math.cos(thetaRad));
+
+    // F_aero = 0.5 * rho * C_d * A * v^2
     const fDragN = 0.5 * airDensity * vehicle.dragCoefficientCd * vehicle.frontalAreaM2 * Math.pow(vMps, 2);
+
+    // F_grade = m * g * sin(theta) (positive uphill, negative downhill)
     const fGradientN = totalMassKg * g * Math.sin(thetaRad);
+
+    // F_inertial = m * a
     const fInertialN = totalMassKg * accelMps2;
 
+    // Total mechanical force required at wheel
     const fTotalN = fRollingN + fDragN + fGradientN + fInertialN;
 
-    // Wheel Power (W)
-    let wheelPowerW = fTotalN * vMps;
+    // 5. Wheel Power (Watts)
+    const wheelPowerW = fTotalN * vMps;
 
-    // Thermal Resistance
-    const rInt = calculateCellInternalResistance(0.034, currentPackTempC);
+    // 6. Cell Internal Resistance
+    const rInt = calculateCellInternalResistance(0.032, currentPackTempC);
 
-    // Electrical Power Draw & Regen
+    // 7. Dynamic Pack Voltage (decreases with SoC drain)
+    const packVoltageV = vehicle.nominalVoltageV * (0.86 + 0.14 * (currentSocPct / 100));
+
+    // 8. Electrical Power Draw & Realistic Regenerative Braking
     let electricalPowerW = auxPowerW;
+    let packCurrentA = 0;
+    let jouleHeatLossW = 0;
+
     if (wheelPowerW > 0) {
-      // Traction: power supplied through motor & inverter
+      // Traction mode: motor consumes battery energy
       let effectiveEfficiency = vehicle.motorEfficiency;
-      // Thermal throttling efficiency penalty when pack > 45°C
-      if (currentPackTempC > vehicle.thermalThrottlingTempC) {
-        effectiveEfficiency -= 0.12; // 12% extra losses due to hot winding & inverter derate
+      // Thermal throttling derate: 12% efficiency loss due to hot motor windings & inverter throttling
+      if (currentPackTempC >= vehicle.thermalThrottlingTempC) {
+        effectiveEfficiency = Math.max(0.65, effectiveEfficiency - 0.12);
       }
-      electricalPowerW += wheelPowerW / effectiveEfficiency;
+      const tractionElectricalW = wheelPowerW / effectiveEfficiency;
+      electricalPowerW += tractionElectricalW;
+
+      // Pack discharge current
+      packCurrentA = electricalPowerW / Math.max(30, packVoltageV);
+      jouleHeatLossW = Math.pow(packCurrentA, 2) * rInt;
     } else {
-      // Regenerative braking: recoup kinetic energy
-      electricalPowerW += wheelPowerW * vehicle.regenEfficiency;
+      // Deceleration or downhill mode: potential regenerative braking
+      const mechanicalRegenAvailableW = Math.abs(wheelPowerW) * vehicle.regenEfficiency;
+      // Enforce vehicle regen power limit and battery acceptance conditions
+      const maxAllowedRegenW = Math.min(vehicle.maxRegenPowerW, 1600);
+
+      // Disable regen if battery is fully charged (>= 98%) or critically hot (>= 50°C)
+      let actualRegenRecoupedW = 0;
+      if (currentSocPct < 98.0 && currentPackTempC < 50.0) {
+        actualRegenRecoupedW = Math.min(mechanicalRegenAvailableW, maxAllowedRegenW);
+      }
+
+      // Charging current flowing into battery
+      const regenChargeCurrentA = actualRegenRecoupedW / Math.max(30, packVoltageV);
+      jouleHeatLossW = Math.pow(regenChargeCurrentA, 2) * rInt;
+
+      // Net battery power = Aux load - (Regen power entering pack - internal cell heating)
+      electricalPowerW = auxPowerW - Math.max(0, actualRegenRecoupedW - jouleHeatLossW);
+      packCurrentA = electricalPowerW >= 0 ? electricalPowerW / packVoltageV : -regenChargeCurrentA;
     }
 
-    // Battery pack current (A) & Joule heat losses
-    const packVoltageV = vehicle.nominalVoltageV * (0.85 + 0.15 * (currentSocPct / 100));
-    const packCurrentA = Math.max(0, electricalPowerW / Math.max(35, packVoltageV));
-    const jouleHeatLossW = Math.pow(packCurrentA, 2) * rInt;
-
-    // Total battery electrical power including internal cell resistance
-    const totalBatteryPowerW = Math.max(0, electricalPowerW + jouleHeatLossW);
+    // Total battery electrical power including internal resistance losses
+    const totalBatteryPowerW = wheelPowerW > 0 ? (electricalPowerW + jouleHeatLossW) : electricalPowerW;
     const stepEnergyWh = (totalBatteryPowerW * segmentTimeS) / 3600;
     cumulativeEnergyWh += stepEnergyWh;
 
-    // Thermal transient update dT/dt = (Q_gen - Q_dissipated) / C
-    const heatDissipatedW = convectiveCoolingCoeff * (currentPackTempC - ambientTempC);
+    // 9. Battery Thermal Transient ODE
+    // C_thermal * dT/dt = Joule_heating - h_conv(v) * (T_pack - T_ambient)
+    const effectiveHConv = baseConvectiveCoolingWPerK + convectiveSpeedFactor * vMps;
+    const heatDissipatedW = effectiveHConv * (currentPackTempC - ambientTempC);
     const netHeatRateW = jouleHeatLossW - heatDissipatedW;
     const deltaTempC = (netHeatRateW * segmentTimeS) / thermalCapacitance;
-    currentPackTempC = Math.max(ambientTempC - 4, currentPackTempC + deltaTempC);
 
+    // Stable numerical integration with natural lower bound
+    currentPackTempC = Math.max(ambientTempC - 4, currentPackTempC + deltaTempC);
     if (currentPackTempC > peakPackTempC) {
       peakPackTempC = currentPackTempC;
     }
 
-    // SoC depletion
+    // 10. Battery SoC Depletion & Conservation
     const socDropPct = (stepEnergyWh / batteryTotalWh) * 100;
-    currentSocPct = Math.max(0, currentSocPct - socDropPct);
+    currentSocPct = Math.min(100, Math.max(0, currentSocPct - socDropPct));
 
+    // 11. State Classifications & Event Triggers
     const isThrottling = currentPackTempC >= vehicle.thermalThrottlingTempC;
-    if (isThrottling && !throttlePoint) {
+    const isLowSoc = currentSocPct <= 18.0;
+    const isStalled = currentSocPct <= 12.0 || currentPackTempC >= vehicle.maxPackTempC;
+
+    if (isThrottling && !hasThrottled) {
+      hasThrottled = true;
       throttlePoint = {
         distanceKm: parseFloat(cumulativeDistanceKm.toFixed(2)),
         lat: pt.lat,
         lng: pt.lng,
       };
+      events.push({
+        stepIndex: i,
+        distanceKm: parseFloat(cumulativeDistanceKm.toFixed(2)),
+        lat: pt.lat,
+        lng: pt.lng,
+        type: 'THERMAL_THROTTLING',
+        message: `BMS Thermal Throttling triggered at ${currentPackTempC.toFixed(1)}°C (derating motor torque by 12%)`,
+        telemetry: {
+          socPct: parseFloat(currentSocPct.toFixed(1)),
+          packTempC: parseFloat(currentPackTempC.toFixed(1)),
+          speedKmh: Math.round(targetSpeedKmh),
+          powerKw: parseFloat((totalBatteryPowerW / 1000).toFixed(2)),
+        },
+      });
     }
 
-    // Deep discharge or Thermal Shutdown condition
-    const isStalled = currentSocPct <= 12.0 || currentPackTempC >= vehicle.maxPackTempC;
+    if (isLowSoc && !events.some((e) => e.type === 'LOW_SOC_WARNING')) {
+      events.push({
+        stepIndex: i,
+        distanceKm: parseFloat(cumulativeDistanceKm.toFixed(2)),
+        lat: pt.lat,
+        lng: pt.lng,
+        type: 'LOW_SOC_WARNING',
+        message: `Low SoC reserve warning: ${currentSocPct.toFixed(1)}% remaining`,
+        telemetry: {
+          socPct: parseFloat(currentSocPct.toFixed(1)),
+          packTempC: parseFloat(currentPackTempC.toFixed(1)),
+          speedKmh: Math.round(targetSpeedKmh),
+          powerKw: parseFloat((totalBatteryPowerW / 1000).toFixed(2)),
+        },
+      });
+    }
+
     if (isStalled && !hasStalled) {
       hasStalled = true;
+      const stallReason =
+        currentSocPct <= 12.0
+          ? `BMS Deep-Discharge Stall: State of Charge dropped to ${currentSocPct.toFixed(1)}% (< 12% cutoff threshold)`
+          : `BMS Critical Thermal Shutdown: Pack core temperature reached ${currentPackTempC.toFixed(1)}°C (>= ${vehicle.maxPackTempC}°C cutoff)`;
+
       stallPoint = {
         distanceKm: parseFloat(cumulativeDistanceKm.toFixed(2)),
         lat: pt.lat,
         lng: pt.lng,
-        reason:
-          currentSocPct <= 12.0
-            ? 'Battery deep-discharge (<12% BMS cutoff) under extreme payload & grade resistance'
-            : `Pack thermal runaway safety threshold exceeded (${currentPackTempC.toFixed(1)}°C > ${vehicle.maxPackTempC}°C)`,
+        reason: stallReason,
       };
+      events.push({
+        stepIndex: i,
+        distanceKm: parseFloat(cumulativeDistanceKm.toFixed(2)),
+        lat: pt.lat,
+        lng: pt.lng,
+        type: 'CRITICAL_STALL',
+        message: stallReason,
+        telemetry: {
+          socPct: parseFloat(currentSocPct.toFixed(1)),
+          packTempC: parseFloat(currentPackTempC.toFixed(1)),
+          speedKmh: Math.round(targetSpeedKmh),
+          powerKw: parseFloat((totalBatteryPowerW / 1000).toFixed(2)),
+        },
+      });
     }
 
     segments.push({
@@ -350,39 +553,66 @@ export function computeRoutePhysics(
       cumulativeDistanceKm: parseFloat(cumulativeDistanceKm.toFixed(2)),
       elevationM: Math.round(pt.elevationM),
       gradePct: parseFloat(gradePct.toFixed(1)),
-      speedKmh: Math.round(speedKmh),
+      speedKmh: Math.round(targetSpeedKmh),
       fRollingN: parseFloat(fRollingN.toFixed(1)),
       fDragN: parseFloat(fDragN.toFixed(1)),
       fGradientN: parseFloat(fGradientN.toFixed(1)),
       fInertialN: parseFloat(fInertialN.toFixed(1)),
       fTotalN: parseFloat(fTotalN.toFixed(1)),
+      wheelPowerKw: parseFloat((wheelPowerW / 1000).toFixed(2)),
       powerKw: parseFloat((totalBatteryPowerW / 1000).toFixed(2)),
       energyWh: parseFloat(stepEnergyWh.toFixed(2)),
       cumulativeEnergyWh: parseFloat(cumulativeEnergyWh.toFixed(1)),
       packTempC: parseFloat(currentPackTempC.toFixed(1)),
       socPct: parseFloat(currentSocPct.toFixed(1)),
+      packVoltageV: parseFloat(packVoltageV.toFixed(1)),
+      packCurrentA: parseFloat(packCurrentA.toFixed(1)),
       isThrottling,
+      isLowSoc,
       isStalled,
       warning: isStalled
         ? 'CRITICAL DISCHARGE STALL'
         : isThrottling
         ? 'THERMAL THROTTLING DERATE (>45°C)'
+        : isLowSoc
+        ? 'LOW BATTERY WARNING'
         : undefined,
     });
   }
 
   const totalDistanceKm = parseFloat(cumulativeDistanceKm.toFixed(2));
-  const totalEnergyKwh = parseFloat((cumulativeEnergyWh / 1000).toFixed(3));
+  const totalEnergyKwh = parseFloat(Math.max(0, cumulativeEnergyWh / 1000).toFixed(3));
   const efficiencyWhPerKm = totalDistanceKm > 0 ? parseFloat((cumulativeEnergyWh / totalDistanceKm).toFixed(1)) : 0;
   const averageSpeedKmh = totalTimeHours > 0 ? parseFloat((totalDistanceKm / totalTimeHours).toFixed(1)) : 28;
-  const travelTimeMinutes = Math.round(totalTimeHours * 60);
+  const travelTimeMinutes = Math.max(1, Math.round(totalTimeHours * 60));
 
-  // Financial ROI calculation for Indian delivery fleets (Zepto/Blinkit/Zomato)
-  // Monthly savings per vehicle from avoiding roadside towings (₹800/towing), battery cell degradation (₹250), and delivery SLA delay penalties (₹150).
-  const towingPreventedInr = hasStalled ? 850 : 200;
-  const degradationAvoidedInr = peakPackTempC > 45 ? 650 : 250;
-  const slaUptimeInr = hasStalled ? 500 : 150;
-  const financialSavingsInrMonth = towingPreventedInr + degradationAvoidedInr + slaUptimeInr;
+  // 12. Transparent Multi-Factor Route Scoring
+  const energyFactor = Math.max(0, Math.min(100, 100 - (efficiencyWhPerKm / 60) * 100));
+  const thermalFactor = Math.max(0, Math.min(100, 100 - ((peakPackTempC - 35) / 20) * 100));
+  const arrivalReserveFactor = Math.max(0, Math.min(100, (currentSocPct / 50) * 100));
+  const timeFactor = Math.max(0, Math.min(100, 100 - (travelTimeMinutes / 45) * 50));
+
+  const compositeScore = Math.round(
+    energyFactor * 0.35 +
+    thermalFactor * 0.30 +
+    arrivalReserveFactor * 0.25 +
+    timeFactor * 0.10
+  );
+
+  const isSafe = !hasStalled && currentSocPct >= 15.0;
+  const recommendationReason = !isSafe
+    ? `Route unsafe under current ${ambientTempC}°C ambient heat and ${payloadKg}kg cargo payload (${hasStalled ? 'stall predicted' : 'arrival reserve below 15%'}).`
+    : `Route verified safe with ${currentSocPct.toFixed(1)}% arrival reserve and peak cell temperature of ${peakPackTempC.toFixed(1)}°C.`;
+
+  // 13. Transparent Operating Cost Model (INR)
+  // Commercial tariff: ₹8.50 per kWh; Towing rescue: ₹750; Degradation: ₹0.35/Wh; SLA downtime penalty: ₹100
+  const energyCostInr = parseFloat((totalEnergyKwh * 8.5).toFixed(2));
+  const towingRiskCostInr = hasStalled ? 750 : 0;
+  const degradationCostInr = parseFloat(((cumulativeEnergyWh * 0.35 * (peakPackTempC > 45 ? 1.8 : 1.0)) / 10).toFixed(2));
+  const slaPenaltyRiskInr = hasStalled ? 150 : (hasThrottled ? 40 : 0);
+  const totalPerTripInr = parseFloat((energyCostInr + towingRiskCostInr + degradationCostInr + slaPenaltyRiskInr).toFixed(2));
+  // 18 trips/day * 26 operating days/month = ~468 trips/month
+  const monthlyPerVehicleInr = Math.round(totalPerTripInr * 468);
 
   return {
     routeId,
@@ -396,21 +626,44 @@ export function computeRoutePhysics(
     averageSpeedKmh,
     travelTimeMinutes,
     hasStalled,
+    hasThrottled,
+    events,
     stallPoint,
     throttlePoint,
     segments,
-    financialSavingsInrMonth,
+    routeScore: {
+      overallScore: compositeScore,
+      isSafe,
+      recommendationReason,
+      factors: {
+        energyScore: Math.round(energyFactor),
+        thermalScore: Math.round(thermalFactor),
+        arrivalReserveScore: Math.round(arrivalReserveFactor),
+        timeScore: Math.round(timeFactor),
+      },
+    },
+    operatingCostEstimate: {
+      energyCostInr,
+      towingRiskCostInr,
+      batteryDegradationCostInr: degradationCostInr,
+      slaPenaltyRiskInr,
+      totalPerTripInr,
+      monthlyPerVehicleInr,
+    },
+    // Backward-compatible properties
+    financialSavingsInrMonth: Math.max(400, Math.round(monthlyPerVehicleInr * 0.45)),
     breakdown: {
-      towingPreventedInr,
-      degradationAvoidedInr,
-      slaUptimeInr,
+      towingPreventedInr: hasStalled ? 750 : 200,
+      degradationAvoidedInr: peakPackTempC > 45 ? 550 : 250,
+      slaUptimeInr: hasStalled ? 450 : 150,
     },
   };
 }
 
 /**
- * Generates an irregular Safe-Reach Isochrone Polygon
- * Accounts for terrain gradient, road roughness, cargo payload, and ambient heat
+ * Directional Terrain & Thermal Estimated Reach (Polar Approximation)
+ * Accounts for cargo payload, ambient temperature degradation, and directional terrain bias.
+ * Note: Clearly labeled as polar directional estimation, not road-network constrained isochrone.
  */
 export function generateSafeReachPolygon(
   centerLat: number,
@@ -423,27 +676,28 @@ export function generateSafeReachPolygon(
   const points: [number, number][] = [];
   const numSectors = 24;
 
-  // Base range on flat ideal conditions: approx 1.1 km per 1% SoC for commercial 2W
-  const nominalKm = (currentSocPct - 15) * 1.05; // 15% reserve buffer
+  // Base range on flat ideal conditions: approx 1.05 km per 1% SoC for commercial 2W
+  const usableSocPct = Math.max(0, currentSocPct - 15); // 15% safety reserve
+  const nominalKm = usableSocPct * 1.05;
 
-  // Ambient heat degradation factor (loss above 38°C)
-  const heatPenalty = Math.max(0, (ambientTempC - 38) * 0.025);
-  // Payload penalty (loss above 40kg)
-  const payloadPenalty = (payloadKg / 140) * 0.32;
+  // Ambient thermal degradation factor (losses above 38°C)
+  const heatPenalty = Math.max(0, (ambientTempC - 38) * 0.022);
+  // Cargo payload penalty (losses scaling with mass above 40kg)
+  const payloadPenalty = (Math.min(140, payloadKg) / 140) * 0.28;
 
   for (let i = 0; i <= numSectors; i++) {
     const angleDeg = (i * 360) / numSectors;
     const angleRad = (angleDeg * Math.PI) / 180;
 
-    // Directional terrain gradient bias (e.g. North/East in Bengaluru has elevated ridges & flyovers)
-    // Ridge gradient simulation: North-North-East has steep climbs, South-West has gradual descents
-    const terrainBias = Math.sin(angleRad + 0.8) * 0.35; // -0.35 (climb/rough) to +0.35 (downhill/smooth)
+    // Directional terrain bias: represents regional ridge/valley inclination
+    // North-North-East has steeper inclines (+grade), South-West has downslope
+    const terrainBias = Math.sin(angleRad + 0.8) * 0.25;
     const effectiveReachKm = Math.max(
-      2.5,
-      nominalKm * (1 - heatPenalty - payloadPenalty + terrainBias * 0.5)
+      1.5,
+      nominalKm * (1 - heatPenalty - payloadPenalty + terrainBias * 0.4)
     );
 
-    // Convert km to approx lat/lng offset
+    // Coordinate projection (WGS84 spherical approximation)
     const latOffset = (effectiveReachKm / 110.574) * Math.cos(angleRad);
     const lngOffset = (effectiveReachKm / (111.32 * Math.cos((centerLat * Math.PI) / 180))) * Math.sin(angleRad);
 

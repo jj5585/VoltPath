@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Key, X, CheckCircle2, AlertCircle, ExternalLink, RefreshCw, Trash2, Map } from 'lucide-react';
+import { Key, X, CheckCircle2, AlertCircle, ExternalLink, RefreshCw, Trash2, Map, ShieldAlert } from 'lucide-react';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -48,7 +48,7 @@ export default function ApiKeyModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
       <div className="bg-[#0E131F] border border-volt-border rounded-xl w-full max-w-lg p-5 shadow-2xl space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-volt-border/60 pb-3">
@@ -58,7 +58,7 @@ export default function ApiKeyModal({
             </div>
             <div>
               <h2 className="text-sm font-bold text-white">Google Maps API Configuration</h2>
-              <p className="text-[11px] text-slate-400">Configure your Google Maps Platform key for dynamic map rendering</p>
+              <p className="text-[11px] text-slate-400">Configure client-side Google Maps Platform rendering</p>
             </div>
           </div>
           <button
@@ -98,17 +98,26 @@ export default function ApiKeyModal({
           </div>
         </div>
 
+        {/* Security Notice */}
+        <div className="p-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[10px] text-blue-300 leading-relaxed flex items-start gap-2">
+          <ShieldAlert className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+          <div>
+            <strong className="text-white block mb-0.5">Security Architecture:</strong>
+            Server secrets are protected via server environment variables. Public browser map tokens are only used for client-side canvas rendering. Configure permanent credentials securely in <code className="text-white bg-slate-900 px-1 py-0.5 rounded">.env.local</code>.
+          </div>
+        </div>
+
         {/* API Key Input */}
         <div className="space-y-1.5">
           <label className="text-xs font-medium text-slate-300 flex items-center justify-between">
-            <span>Google Maps API Key</span>
+            <span>Client Google Maps JavaScript Key</span>
             {currentKey ? (
               <span className="text-[10px] text-[#00F5A0] flex items-center gap-1 font-mono">
-                <CheckCircle2 className="w-3 h-3" /> Key Loaded
+                <CheckCircle2 className="w-3 h-3" /> Key Active in Session
               </span>
             ) : (
               <span className="text-[10px] text-amber-400 flex items-center gap-1 font-mono">
-                <AlertCircle className="w-3 h-3" /> No Key Configured
+                <AlertCircle className="w-3 h-3" /> Defaulting to MapLibre
               </span>
             )}
           </label>
@@ -121,9 +130,6 @@ export default function ApiKeyModal({
               className="w-full bg-[#0A0E17] border border-volt-border rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-[#00D2FF] transition-colors"
             />
           </div>
-          <p className="text-[10px] text-slate-500">
-            Keys can also be configured in <code className="text-slate-400 bg-slate-900 px-1 py-0.5 rounded">.env.local</code> as <code className="text-slate-400 bg-slate-900 px-1 py-0.5 rounded">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code>.
-          </p>
         </div>
 
         {/* Guide / Required APIs */}
@@ -141,8 +147,7 @@ export default function ApiKeyModal({
           </div>
           <ul className="list-disc list-inside space-y-0.5 text-slate-400 text-[10px]">
             <li><strong className="text-slate-200">Maps JavaScript API</strong> (Required for map canvas and dark styles)</li>
-            <li><strong className="text-slate-200">Elevation API</strong> (Optional: road slope and altitude contours)</li>
-            <li><strong className="text-slate-200">Directions API</strong> (Optional: traffic & road networks)</li>
+            <li><strong className="text-slate-200">Routes API (New)</strong> (Server-side two-wheeler navigation)</li>
           </ul>
         </div>
 
@@ -154,7 +159,7 @@ export default function ApiKeyModal({
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            Clear Key
+            Clear Session Key
           </button>
           <div className="flex items-center gap-2">
             <button

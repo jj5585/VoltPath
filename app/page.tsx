@@ -11,6 +11,10 @@ import {
   Map as MapIcon,
   Key,
   Globe,
+  Sliders,
+  AlertTriangle,
+  CheckCircle2,
+  Compass,
 } from 'lucide-react';
 import {
   FLEET_VEHICLES,
@@ -26,9 +30,10 @@ import {
   SwapStation,
 } from '@/lib/geospatialData';
 import { synthesizeAIS140Frame, AIS140TelemetryFrame } from '@/lib/ais140Generator';
-import HeaderFleetBar, { ShiftPreset } from '@/components/HeaderFleetBar';
+import HeaderFleetBar, { ShiftPreset, SimulationState } from '@/components/HeaderFleetBar';
 import CorridorSelectorBar from '@/components/CorridorSelectorBar';
 import CustomLocationModal from '@/components/CustomLocationModal';
+import ScenarioConfigModal, { CustomScenarioConfig } from '@/components/ScenarioConfigModal';
 import MapDeck from '@/components/MapDeck';
 import GoogleMapDeck from '@/components/GoogleMapDeck';
 import ApiKeyModal from '@/components/ApiKeyModal';
@@ -43,33 +48,43 @@ export default function VoltPathDashboard() {
   const [selectedDestination, setSelectedDestination] = useState<DeliveryHub>(DELIVERY_HUBS[5]);
   const [customModalTarget, setCustomModalTarget] = useState<'source' | 'destination' | null>(null);
 
-  // State: Controls
+  // State: Vehicle & Environmental Variables
   const [selectedVehicle, setSelectedVehicle] = useState<VehicleSpecs>(FLEET_VEHICLES[0]);
   const [ambientTempC, setAmbientTempC] = useState(42);
   const [payloadKg, setPayloadKg] = useState(120);
   const [startSocPct, setStartSocPct] = useState(55);
+  const [activePresetId, setActivePresetId] = useState<string | undefined>('noon-peak');
+
+  // State: Scenario Editor Modal
+  const [isScenarioModalOpen, setIsScenarioModalOpen] = useState(false);
+  const [customScenario, setCustomScenario] = useState<CustomScenarioConfig>({
+    ambientTempC: 42,
+    payloadKg: 120,
+    riderWeightKg: 70,
+    initialSocPct: 55,
+    initialPackTempC: 40,
+    roadQuality: 'rough',
+    trafficIntensity: 'moderate',
+    auxPowerW: 45,
+    vehicleId: FLEET_VEHICLES[0].id,
+  });
 
   // State: Google Maps API Key & Engine Selection
   const [googleMapsApiKey, setGoogleMapsApiKey] = useState<string>('');
   const [mapEngine, setMapEngine] = useState<'maplibre' | 'google'>('maplibre');
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
 
-  // Load API key from env or localStorage on mount
+  // Load API key from env or sessionStorage on mount
   useEffect(() => {
     const envKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-    const storedKey = typeof window !== 'undefined' ? localStorage.getItem('voltpath_google_maps_key') || '' : '';
-    const activeKey = storedKey || envKey;
-    if (activeKey) {
-      setGoogleMapsApiKey(activeKey);
+    if (envKey) {
+      setGoogleMapsApiKey(envKey);
       setMapEngine('google');
     }
   }, []);
 
   const handleSaveApiKey = (key: string) => {
     setGoogleMapsApiKey(key);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('voltpath_google_maps_key', key);
-    }
     if (key) {
       setMapEngine('google');
     }
@@ -95,8 +110,8 @@ export default function VoltPathDashboard() {
   const [showIsochrone, setShowIsochrone] = useState(true);
   const [activeRoute, setActiveRoute] = useState<'A' | 'B'>('A');
 
-  // State: Playback / Simulation
-  const [isSimulating, setIsSimulating] = useState(false);
+  // State: Playback / Simulation State Machine
+  const [simState, setSimState] = useState<SimulationState>('IDLE');
   const [playbackIndex, setPlaybackIndex] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const playbackTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -105,13 +120,16 @@ export default function VoltPathDashboard() {
   const [telemetryFrames, setTelemetryFrames] = useState<AIS140TelemetryFrame[]>([]);
   const [currentTelemetryFrame, setCurrentTelemetryFrame] = useState<AIS140TelemetryFrame | null>(null);
 
+  // Dynamic corridor title
+  const corridorTitle = `${selectedSource.name.split(' (')[0]} ➔ ${selectedDestination.name.split(' (')[0]}`;
+
   // Swap Source & Destination
   const handleSwapHubs = () => {
     const prevSource = selectedSource;
     const prevDestination = selectedDestination;
     setSelectedSource(prevDestination);
     setSelectedDestination(prevSource);
-    setIsSimulating(false);
+    handleReset();
   };
 
   // Add Custom Location Hub
@@ -122,14 +140,14 @@ export default function VoltPathDashboard() {
     } else {
       setSelectedDestination(newHub);
     }
-    setIsSimulating(false);
+    handleReset();
   };
 
   // Sync / Update Hub Elevations Automatically
   const handleUpdateElevations = (srcElev: number, dstElev: number) => {
     setSelectedSource((prev) => ({ ...prev, elevationM: srcElev }));
     setSelectedDestination((prev) => ({ ...prev, elevationM: dstElev }));
-    setIsSimulating(false);
+    handleReset();
   };
 
   // Recalculate physics when parameters or corridor change
@@ -140,29 +158,31 @@ export default function VoltPathDashboard() {
     setCurrentCenter(dynamicCorridor.center);
     setCurrentSwapStations(dynamicCorridor.swapStations);
 
-    const rA = computeRoutePhysics(
-      dynamicCorridor.routeA.waypoints,
-      vehicle,
+    const rA = computeRoutePhysics(dynamicCorridor.routeA.waypoints, vehicle, {
       ambientTempC,
       payloadKg,
-      70,
-      startSocPct,
-      ambientTempC - 2,
-      dynamicCorridor.routeA.id,
-      dynamicCorridor.routeA.name
-    );
+      riderWeightKg: customScenario.riderWeightKg,
+      initialSocPct: startSocPct,
+      initialPackTempC: ambientTempC - 2,
+      roadQualityOverride: customScenario.roadQuality,
+      trafficIntensity: customScenario.trafficIntensity,
+      auxPowerW: customScenario.auxPowerW,
+      routeId: dynamicCorridor.routeA.id,
+      routeName: dynamicCorridor.routeA.name,
+    });
 
-    const rB = computeRoutePhysics(
-      dynamicCorridor.routeB.waypoints,
-      vehicle,
-      ambientTempC - 1.5,
+    const rB = computeRoutePhysics(dynamicCorridor.routeB.waypoints, vehicle, {
+      ambientTempC: ambientTempC - 1.5,
       payloadKg,
-      70,
-      startSocPct,
-      ambientTempC - 3,
-      dynamicCorridor.routeB.id,
-      dynamicCorridor.routeB.name
-    );
+      riderWeightKg: customScenario.riderWeightKg,
+      initialSocPct: startSocPct,
+      initialPackTempC: ambientTempC - 3,
+      roadQualityOverride: 'smooth',
+      trafficIntensity: customScenario.trafficIntensity,
+      auxPowerW: customScenario.auxPowerW,
+      routeId: dynamicCorridor.routeB.id,
+      routeName: dynamicCorridor.routeB.name,
+    });
 
     setRouteA(rA);
     setRouteB(rB);
@@ -181,7 +201,7 @@ export default function VoltPathDashboard() {
       distanceDeltaKm: parseFloat((rB.totalDistanceKm - rA.totalDistanceKm).toFixed(2)),
       energySavedKwh: parseFloat((rA.totalEnergyKwh - rB.totalEnergyKwh).toFixed(3)),
       energySavedPct: parseFloat(
-        (((rA.totalEnergyKwh - rB.totalEnergyKwh) / rA.totalEnergyKwh) * 100).toFixed(1)
+        rA.totalEnergyKwh > 0 ? (((rA.totalEnergyKwh - rB.totalEnergyKwh) / rA.totalEnergyKwh) * 100).toFixed(1) : '0'
       ),
       endSocDeltaPct: parseFloat((rB.endSocPct - rA.endSocPct).toFixed(1)),
       tempReductionC: parseFloat((rA.peakPackTempC - rB.peakPackTempC).toFixed(1)),
@@ -192,7 +212,8 @@ export default function VoltPathDashboard() {
     setPlaybackIndex(0);
     setTelemetryFrames([]);
     setCurrentTelemetryFrame(null);
-  }, [selectedVehicle, selectedSource, selectedDestination, ambientTempC, payloadKg, startSocPct]);
+    setSimState('IDLE');
+  }, [selectedVehicle, selectedSource, selectedDestination, ambientTempC, payloadKg, startSocPct, customScenario]);
 
   // Fetch and apply real map street navigation routes from Google / OpenStreetMap
   useEffect(() => {
@@ -207,50 +228,59 @@ export default function VoltPathDashboard() {
         const res = await fetch(url);
         const data = await res.json();
 
-        if (!isCancelled && data.status === 'success' && data.routeA && data.routeB) {
+        if (!isCancelled && data.status === 'success' && data.routeA) {
           setFullPolylineA(data.routeA.fullPolyline || []);
-          setFullPolylineB(data.routeB.fullPolyline || []);
+          if (data.routeB) {
+            setFullPolylineB(data.routeB.fullPolyline || []);
+          }
           setRoutingSource(data.routingProvider || 'Google Routes API (Two Wheeler)');
 
           // Recompute physics on actual street waypoints
           const vehicle = selectedVehicle;
-          const rA = computeRoutePhysics(
-            data.routeA.waypoints,
-            vehicle,
+          const rA = computeRoutePhysics(data.routeA.waypoints, vehicle, {
             ambientTempC,
             payloadKg,
-            70,
-            startSocPct,
-            ambientTempC - 2,
-            'real-street-a',
-            `Route A: Direct Flat (${data.routeA.roadSummary || selectedSource.name.split(' (')[0]})`
-          );
+            riderWeightKg: customScenario.riderWeightKg,
+            initialSocPct: startSocPct,
+            initialPackTempC: ambientTempC - 2,
+            roadQualityOverride: customScenario.roadQuality,
+            trafficIntensity: customScenario.trafficIntensity,
+            auxPowerW: customScenario.auxPowerW,
+            routeId: 'real-street-a',
+            routeName: `Route A: Direct Flat (${data.routeA.roadSummary || selectedSource.name.split(' (')[0]})`,
+          });
 
-          const rB = computeRoutePhysics(
-            data.routeB.waypoints,
-            vehicle,
-            ambientTempC - 1.5,
-            payloadKg,
-            70,
-            startSocPct,
-            ambientTempC - 3,
-            'real-street-b',
-            `Route B: VoltPath Optimal (${data.routeB.roadSummary || selectedDestination.name.split(' (')[0]})`
-          );
+          let rB: RoutePhysicsResult | null = null;
+          if (data.routeB) {
+            rB = computeRoutePhysics(data.routeB.waypoints, vehicle, {
+              ambientTempC: ambientTempC - 1.5,
+              payloadKg,
+              riderWeightKg: customScenario.riderWeightKg,
+              initialSocPct: startSocPct,
+              initialPackTempC: ambientTempC - 3,
+              roadQualityOverride: 'smooth',
+              trafficIntensity: customScenario.trafficIntensity,
+              auxPowerW: customScenario.auxPowerW,
+              routeId: 'real-street-b',
+              routeName: `Route B: VoltPath Optimal (${data.routeB.roadSummary || selectedDestination.name.split(' (')[0]})`,
+            });
+            setRouteB(rB);
+          }
 
           setRouteA(rA);
-          setRouteB(rB);
 
-          setComparison({
-            distanceDeltaKm: parseFloat((rB.totalDistanceKm - rA.totalDistanceKm).toFixed(2)),
-            energySavedKwh: parseFloat((rA.totalEnergyKwh - rB.totalEnergyKwh).toFixed(3)),
-            energySavedPct: parseFloat(
-              (((rA.totalEnergyKwh - rB.totalEnergyKwh) / rA.totalEnergyKwh) * 100).toFixed(1)
-            ),
-            endSocDeltaPct: parseFloat((rB.endSocPct - rA.endSocPct).toFixed(1)),
-            tempReductionC: parseFloat((rA.peakPackTempC - rB.peakPackTempC).toFixed(1)),
-            monthlyFleetSavingsInr: rA.financialSavingsInrMonth,
-          });
+          if (rB) {
+            setComparison({
+              distanceDeltaKm: parseFloat((rB.totalDistanceKm - rA.totalDistanceKm).toFixed(2)),
+              energySavedKwh: parseFloat((rA.totalEnergyKwh - rB.totalEnergyKwh).toFixed(3)),
+              energySavedPct: parseFloat(
+                rA.totalEnergyKwh > 0 ? (((rA.totalEnergyKwh - rB.totalEnergyKwh) / rA.totalEnergyKwh) * 100).toFixed(1) : '0'
+              ),
+              endSocDeltaPct: parseFloat((rB.endSocPct - rA.endSocPct).toFixed(1)),
+              tempReductionC: parseFloat((rA.peakPackTempC - rB.peakPackTempC).toFixed(1)),
+              monthlyFleetSavingsInr: rA.financialSavingsInrMonth,
+            });
+          }
         }
       } catch {
         // Fallback to baseline dynamic corridor
@@ -265,7 +295,7 @@ export default function VoltPathDashboard() {
     return () => {
       isCancelled = true;
     };
-  }, [selectedSource, selectedDestination, selectedVehicle, ambientTempC, payloadKg, startSocPct, recalculate]);
+  }, [selectedSource, selectedDestination, selectedVehicle, ambientTempC, payloadKg, startSocPct, recalculate, customScenario]);
 
   // Active Polyline & Steps
   const activePoly = activeRoute === 'A' ? fullPolylineA : fullPolylineB;
@@ -275,9 +305,9 @@ export default function VoltPathDashboard() {
       ? activePoly.length - 1
       : (activeSegments?.length || 1) - 1;
 
-  // Playback timer
+  // Playback timer effect
   useEffect(() => {
-    if (!isSimulating) {
+    if (simState !== 'RUNNING') {
       if (playbackTimerRef.current) clearInterval(playbackTimerRef.current);
       return;
     }
@@ -292,13 +322,13 @@ export default function VoltPathDashboard() {
     if (totalSteps === 0 || !currentSegments || currentSegments.length === 0) return;
 
     // Smooth playback interval based on total steps and multiplier
-    const intervalMs = Math.max(35, Math.min(300, Math.round(18000 / (totalSteps * playbackSpeed))));
+    const intervalMs = Math.max(35, Math.min(250, Math.round(16000 / (totalSteps * playbackSpeed))));
 
     playbackTimerRef.current = setInterval(() => {
       setPlaybackIndex((prev) => {
         const next = prev + 1;
         if (next >= totalSteps) {
-          setIsSimulating(false);
+          setSimState('COMPLETED');
           return prev;
         }
 
@@ -327,6 +357,12 @@ export default function VoltPathDashboard() {
         }
 
         if (seg) {
+          // Check for critical stall during playback
+          if (seg.isStalled) {
+            setSimState('CRITICAL_STALL');
+            if (playbackTimerRef.current) clearInterval(playbackTimerRef.current);
+          }
+
           const frame = synthesizeAIS140Frame(
             selectedVehicle.name.split(' - ')[0] || 'KA 03 JX 6804',
             selectedVehicle.id,
@@ -338,11 +374,13 @@ export default function VoltPathDashboard() {
             seg.socPct,
             seg.packTempC,
             payloadKg,
-            ambientTempC
+            ambientTempC,
+            undefined,
+            seg.powerKw
           );
 
           setCurrentTelemetryFrame(frame);
-          setTelemetryFrames((prevFrames) => [...prevFrames.slice(-20), frame]);
+          setTelemetryFrames((prevFrames) => [...prevFrames.slice(-25), frame]);
         }
 
         return next;
@@ -353,7 +391,7 @@ export default function VoltPathDashboard() {
       if (playbackTimerRef.current) clearInterval(playbackTimerRef.current);
     };
   }, [
-    isSimulating,
+    simState,
     playbackSpeed,
     activeRoute,
     routeA,
@@ -367,31 +405,75 @@ export default function VoltPathDashboard() {
 
   // Handle preset selection
   const handlePresetSelect = (preset: ShiftPreset) => {
+    setActivePresetId(preset.id);
     setAmbientTempC(preset.ambientTempC);
     setPayloadKg(preset.payloadKg);
     setStartSocPct(preset.startSocPct);
-    setIsSimulating(false);
+    setCustomScenario((prev) => ({
+      ...prev,
+      ambientTempC: preset.ambientTempC,
+      payloadKg: preset.payloadKg,
+      initialSocPct: preset.startSocPct,
+      roadQuality: preset.roadQualityOverride || 'rough',
+    }));
+    handleReset();
   };
 
-  const handlePlayPause = () => {
-    if (!isSimulating) {
-      if (playbackIndex >= maxIdx) {
+  // Handle custom scenario application from modal
+  const handleApplyCustomScenario = (config: CustomScenarioConfig) => {
+    setActivePresetId(undefined); // Clear standard preset highlight
+    setCustomScenario(config);
+    setAmbientTempC(config.ambientTempC);
+    setPayloadKg(config.payloadKg);
+    setStartSocPct(config.initialSocPct);
+    const v = FLEET_VEHICLES.find((f) => f.id === config.vehicleId);
+    if (v) setSelectedVehicle(v);
+    handleReset();
+  };
+
+  const handlePlayPause = useCallback(() => {
+    if (simState === 'RUNNING') {
+      setSimState('PAUSED');
+    } else {
+      if (playbackIndex >= maxIdx || simState === 'COMPLETED' || simState === 'CRITICAL_STALL') {
         setPlaybackIndex(0);
         setTelemetryFrames([]);
       }
+      setSimState('RUNNING');
     }
-    setIsSimulating(!isSimulating);
-  };
+  }, [simState, playbackIndex, maxIdx]);
 
-  const handleReset = () => {
-    setIsSimulating(false);
+  const handleReset = useCallback(() => {
+    setSimState('IDLE');
     setPlaybackIndex(0);
     setTelemetryFrames([]);
     setCurrentTelemetryFrame(null);
-  };
+  }, []);
+
+  // Keyboard accessibility: Space for Play/Pause, KeyR for Reset
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handlePlayPause();
+      } else if (e.code === 'KeyR') {
+        e.preventDefault();
+        handleReset();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handlePlayPause, handleReset]);
 
   return (
-    <div className="flex flex-col h-screen bg-volt-dark overflow-hidden">
+    <div className="flex flex-col h-screen bg-[#070B13] text-slate-100 overflow-hidden font-sans">
       {/* Header Fleet Bar */}
       <HeaderFleetBar
         selectedVehicle={selectedVehicle}
@@ -403,13 +485,17 @@ export default function VoltPathDashboard() {
         startSocPct={startSocPct}
         onStartSocChange={setStartSocPct}
         onPresetSelect={handlePresetSelect}
-        isSimulating={isSimulating}
+        simState={simState}
+        activePresetId={activePresetId}
+        onOpenScenarioModal={() => setIsScenarioModalOpen(true)}
         googleMapsApiKey={googleMapsApiKey}
         mapEngine={mapEngine}
         onOpenKeyModal={() => setIsKeyModalOpen(true)}
+        onPlayPause={handlePlayPause}
+        onReset={handleReset}
       />
 
-      {/* Origin & Destination Corridor Bar */}
+      {/* Origin & Destination Corridor Selector */}
       <CorridorSelectorBar
         hubs={hubs}
         selectedSource={selectedSource}
@@ -421,60 +507,70 @@ export default function VoltPathDashboard() {
         onUpdateElevations={handleUpdateElevations}
       />
 
-      {/* Main Content Area */}
+      {/* Main Workspace Layout */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar: Route Comparison + Charts */}
-        <div className="w-[340px] shrink-0 border-r border-volt-border overflow-y-auto p-3 space-y-3">
+        {/* Left Sidebar: Route Analytics & ROI */}
+        <div className="w-[330px] shrink-0 border-r border-volt-border overflow-y-auto p-3 space-y-3 bg-[#090D17]">
           <RouteComparisonDrawer
             routeA={routeA}
             routeB={routeB}
             comparison={comparison}
           />
-          {routeA && routeB && (
+          {routeA && (
             <ElevationThermalChart
               routeASegments={routeA.segments}
-              routeBSegments={routeB.segments}
+              routeBSegments={routeB?.segments || []}
               routeAName={routeA.routeName}
-              routeBName={routeB.routeName}
+              routeBName={routeB?.routeName || 'Alternative Bypass'}
+              currentPlaybackIndex={playbackIndex}
+              activeRoute={activeRoute}
+              stallDistanceKm={activeRoute === 'A' ? routeA.stallPoint?.distanceKm : routeB?.stallPoint?.distanceKm}
+              throttleDistanceKm={activeRoute === 'A' ? routeA.throttlePoint?.distanceKm : routeB?.throttlePoint?.distanceKm}
             />
           )}
         </div>
 
-        {/* Center: Map + Playback Controls */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Playback Controls Bar */}
-          <div className="bg-[#0D1117] border-b border-volt-border px-4 py-2 flex items-center gap-3">
-            {/* Play/Pause */}
-            <button
-              onClick={handlePlayPause}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                isSimulating
-                  ? 'bg-orange-500/15 text-orange-400 border border-orange-500/30'
-                  : 'bg-[#00F5A0]/15 text-[#00F5A0] border border-[#00F5A0]/30 hover:bg-[#00F5A0]/25'
-              }`}
-            >
-              {isSimulating ? (
-                <Pause className="w-3.5 h-3.5" />
-              ) : (
-                <Play className="w-3.5 h-3.5" />
-              )}
-              {isSimulating ? 'Pause' : 'Play'}
-            </button>
-            <button
-              onClick={handleReset}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-volt-card border border-volt-border text-slate-300 hover:border-slate-500 transition-all"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Reset
-            </button>
+        {/* Center: Map Workspace & Playback Bar */}
+        <div className="flex-1 flex flex-col overflow-hidden bg-[#0A0E1A]">
+          {/* Simulation Control Toolbar */}
+          <div className="bg-[#0B101C] border-b border-volt-border px-4 py-2 flex flex-wrap items-center justify-between gap-3">
+            {/* Play/Pause & Reset Buttons */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handlePlayPause}
+                title="Play / Pause simulation (Spacebar)"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                  simState === 'RUNNING'
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 hover:bg-amber-500/30'
+                    : simState === 'CRITICAL_STALL'
+                    ? 'bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30'
+                    : 'bg-[#00F5A0]/20 text-[#00F5A0] border border-[#00F5A0]/40 hover:bg-[#00F5A0]/30'
+                }`}
+              >
+                {simState === 'RUNNING' ? (
+                  <Pause className="w-3.5 h-3.5" />
+                ) : (
+                  <Play className="w-3.5 h-3.5" />
+                )}
+                {simState === 'RUNNING' ? 'Pause' : simState === 'CRITICAL_STALL' ? 'Replay' : 'Run Simulation'}
+              </button>
+              <button
+                onClick={handleReset}
+                title="Reset simulation (R key)"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#121826] border border-volt-border text-slate-300 hover:text-white hover:border-slate-500 transition-all"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset
+              </button>
+            </div>
 
-            {/* Speed Toggle */}
-            <div className="flex items-center gap-1 bg-volt-card border border-volt-border rounded-lg overflow-hidden">
-              {[1, 2, 5].map((s) => (
+            {/* Playback Speed Select */}
+            <div className="flex items-center gap-1 bg-[#121826] border border-volt-border rounded-lg p-0.5">
+              {[1, 2, 5, 10].map((s) => (
                 <button
                   key={s}
                   onClick={() => setPlaybackSpeed(s)}
-                  className={`px-2 py-1 text-[10px] font-mono font-bold transition-colors ${
+                  className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded transition-colors ${
                     playbackSpeed === s
                       ? 'bg-[#00F5A0]/20 text-[#00F5A0]'
                       : 'text-slate-500 hover:text-slate-300'
@@ -485,8 +581,8 @@ export default function VoltPathDashboard() {
               ))}
             </div>
 
-            {/* Scrub Slider */}
-            <div className="flex-1 flex items-center gap-2">
+            {/* Timeline Scrubber */}
+            <div className="flex-1 max-w-sm flex items-center gap-2">
               <input
                 type="range"
                 min={0}
@@ -494,26 +590,23 @@ export default function VoltPathDashboard() {
                 value={playbackIndex}
                 onChange={(e) => {
                   setPlaybackIndex(parseInt(e.target.value));
-                  setIsSimulating(false);
+                  if (simState === 'RUNNING') setSimState('PAUSED');
                 }}
                 className="flex-1"
               />
               <span className="text-[10px] font-mono text-slate-400 w-16 text-right">
-                Step {playbackIndex}/{maxIdx}
+                {playbackIndex}/{maxIdx}
               </span>
             </div>
 
-            {/* Separator */}
-            <div className="w-px h-6 bg-volt-border" />
-
-            {/* Active Route Selector */}
-            <div className="flex items-center gap-1 bg-volt-card border border-volt-border rounded-lg overflow-hidden">
+            {/* Active Route Toggle */}
+            <div className="flex items-center gap-1 bg-[#121826] border border-volt-border rounded-lg p-0.5">
               <button
                 onClick={() => {
                   setActiveRoute('A');
                   handleReset();
                 }}
-                className={`px-2.5 py-1 text-[10px] font-bold transition-colors ${
+                className={`px-2.5 py-1 text-[10px] font-bold rounded transition-colors ${
                   activeRoute === 'A'
                     ? 'bg-red-500/20 text-red-400'
                     : 'text-slate-500 hover:text-slate-300'
@@ -526,7 +619,7 @@ export default function VoltPathDashboard() {
                   setActiveRoute('B');
                   handleReset();
                 }}
-                className={`px-2.5 py-1 text-[10px] font-bold transition-colors ${
+                className={`px-2.5 py-1 text-[10px] font-bold rounded transition-colors ${
                   activeRoute === 'B'
                     ? 'bg-[#00F5A0]/20 text-[#00F5A0]'
                     : 'text-slate-500 hover:text-slate-300'
@@ -540,7 +633,7 @@ export default function VoltPathDashboard() {
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setShowRouteA(!showRouteA)}
-                title="Toggle Route A"
+                title="Toggle Route A Visibility"
                 className={`p-1.5 rounded-md transition-colors ${
                   showRouteA ? 'text-red-400 bg-red-500/10' : 'text-slate-600'
                 }`}
@@ -549,7 +642,7 @@ export default function VoltPathDashboard() {
               </button>
               <button
                 onClick={() => setShowRouteB(!showRouteB)}
-                title="Toggle Route B"
+                title="Toggle Route B Visibility"
                 className={`p-1.5 rounded-md transition-colors ${
                   showRouteB ? 'text-[#00F5A0] bg-[#00F5A0]/10' : 'text-slate-600'
                 }`}
@@ -558,7 +651,7 @@ export default function VoltPathDashboard() {
               </button>
               <button
                 onClick={() => setShowIsochrone(!showIsochrone)}
-                title="Toggle Safe-Reach Isochrone"
+                title="Toggle Safe-Reach Contour Visibility"
                 className={`p-1.5 rounded-md transition-colors ${
                   showIsochrone ? 'text-[#00D2FF] bg-[#00D2FF]/10' : 'text-slate-600'
                 }`}
@@ -567,22 +660,11 @@ export default function VoltPathDashboard() {
               </button>
             </div>
 
-            {/* Real Street Routing Status Badge */}
-            {routingSource && (
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-[10px] text-emerald-400 font-mono">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#00F5A0] animate-pulse" />
-                <span className="truncate max-w-[200px]">{routingSource}</span>
-              </div>
-            )}
-
-            {/* Separator */}
-            <div className="w-px h-6 bg-volt-border" />
-
             {/* Map Engine Selector */}
-            <div className="flex items-center gap-1 bg-volt-card border border-volt-border rounded-lg p-0.5">
+            <div className="flex items-center gap-1 bg-[#121826] border border-volt-border rounded-lg p-0.5">
               <button
                 onClick={() => setMapEngine('maplibre')}
-                title="Use MapLibre GL Open Vector/Raster Tiles"
+                title="Use MapLibre GL Vector/Raster Tiles"
                 className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
                   mapEngine === 'maplibre'
                     ? 'bg-[#00F5A0]/20 text-[#00F5A0]'
@@ -612,7 +694,7 @@ export default function VoltPathDashboard() {
             </div>
           </div>
 
-          {/* Map View */}
+          {/* Map Display Viewport */}
           <div className="flex-1 relative">
             {mapEngine === 'google' ? (
               <GoogleMapDeck
@@ -632,6 +714,7 @@ export default function VoltPathDashboard() {
                 fullPolylineA={fullPolylineA}
                 fullPolylineB={fullPolylineB}
                 onOpenKeyModal={() => setIsKeyModalOpen(true)}
+                corridorTitle={corridorTitle}
               />
             ) : (
               <MapDeck
@@ -649,20 +732,32 @@ export default function VoltPathDashboard() {
                 showIsochrone={showIsochrone}
                 fullPolylineA={fullPolylineA}
                 fullPolylineB={fullPolylineB}
+                corridorTitle={corridorTitle}
               />
             )}
           </div>
         </div>
 
-        {/* Right Sidebar: Telemetry HUD */}
-        <div className="w-[310px] shrink-0 border-l border-volt-border p-3">
+        {/* Right Sidebar: AIS-140 Telemetry HUD */}
+        <div className="w-[300px] shrink-0 border-l border-volt-border p-3 bg-[#090D17]">
           <TelemetryHUD
             frames={telemetryFrames}
             currentFrame={currentTelemetryFrame}
-            isLive={isSimulating}
+            isLive={simState === 'RUNNING'}
+            onClearFrames={() => setTelemetryFrames([])}
           />
         </div>
       </div>
+
+      {/* Scenario Variables & Matrix Modal */}
+      <ScenarioConfigModal
+        isOpen={isScenarioModalOpen}
+        onClose={() => setIsScenarioModalOpen(false)}
+        currentConfig={customScenario}
+        onApplyConfig={handleApplyCustomScenario}
+        activeWaypoints={routeA?.segments ? routeA.segments.map(s => ({ lat: s.lat, lng: s.lng, elevationM: s.elevationM, speedKmh: s.speedKmh })) : []}
+        currentVehicle={selectedVehicle}
+      />
 
       {/* Google Maps API Key Modal */}
       <ApiKeyModal

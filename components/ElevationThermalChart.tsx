@@ -1,6 +1,15 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
+import {
+  Mountain,
+  Thermometer,
+  Battery,
+  Zap,
+  Gauge,
+  AlertTriangle,
+  AlertOctagon,
+} from 'lucide-react';
 import { SegmentCalculation } from '@/lib/physicsEngine';
 
 interface ChartProps {
@@ -8,235 +17,311 @@ interface ChartProps {
   routeBSegments: SegmentCalculation[];
   routeAName: string;
   routeBName: string;
+  currentPlaybackIndex?: number;
+  activeRoute?: 'A' | 'B';
+  stallDistanceKm?: number;
+  throttleDistanceKm?: number;
 }
 
-function MiniChart({
-  data,
-  dataKey,
-  color,
-  label,
-  unit,
-  yMin,
-  yMax,
-  warningLine,
-  warningLabel,
-  height = 80,
-  showSecondary,
-  secondaryData,
-  secondaryColor,
-  secondaryLabel,
-}: {
-  data: SegmentCalculation[];
-  dataKey: keyof SegmentCalculation;
-  color: string;
-  label: string;
-  unit: string;
-  yMin: number;
-  yMax: number;
-  warningLine?: number;
-  warningLabel?: string;
-  height?: number;
-  showSecondary?: boolean;
-  secondaryData?: SegmentCalculation[];
-  secondaryColor?: string;
-  secondaryLabel?: string;
-}) {
-  if (!data || data.length < 2) return null;
-
-  const w = 300;
-  const h = height;
-  const padL = 0;
-  const padR = 0;
-  const padT = 4;
-  const padB = 4;
-  const cw = w - padL - padR;
-  const ch = h - padT - padB;
-
-  const toX = (i: number) => padL + (i / (data.length - 1)) * cw;
-  const toY = (val: number) => padT + ch - ((val - yMin) / (yMax - yMin)) * ch;
-
-  const buildPath = (d: SegmentCalculation[]) => {
-    return d
-      .map((seg, i) => {
-        const x = padL + (i / (d.length - 1)) * cw;
-        const y = toY(Number(seg[dataKey]));
-        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-      })
-      .join(' ');
-  };
-
-  const buildArea = (d: SegmentCalculation[]) => {
-    const path = buildPath(d);
-    const lastX = padL + ((d.length - 1) / (d.length - 1)) * cw;
-    return `${path} L${lastX.toFixed(1)},${(padT + ch).toFixed(1)} L${padL},${(padT + ch).toFixed(1)} Z`;
-  };
-
-  const primary = data;
-  const secondary = secondaryData || [];
-
-  const lastVal = Number(primary[primary.length - 1]?.[dataKey] ?? 0);
-  const secLastVal = secondary.length > 0 ? Number(secondary[secondary.length - 1]?.[dataKey] ?? 0) : null;
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] text-slate-400 uppercase tracking-wider">{label}</span>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1">
-            <div className="w-2.5 h-0.5 rounded" style={{ backgroundColor: color }} />
-            <span className="text-[10px] font-mono" style={{ color }}>
-              {lastVal.toFixed(1)}{unit}
-            </span>
-          </div>
-          {showSecondary && secLastVal !== null && (
-            <div className="flex items-center gap-1">
-              <div className="w-2.5 h-0.5 rounded" style={{ backgroundColor: secondaryColor }} />
-              <span className="text-[10px] font-mono" style={{ color: secondaryColor }}>
-                {secLastVal.toFixed(1)}{unit}
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{ height: `${height}px` }}>
-        {/* Grid lines */}
-        {[0, 0.25, 0.5, 0.75, 1].map((frac) => (
-          <line
-            key={frac}
-            x1={padL}
-            x2={w - padR}
-            y1={padT + ch * (1 - frac)}
-            y2={padT + ch * (1 - frac)}
-            stroke="#1F293D"
-            strokeWidth={0.5}
-          />
-        ))}
-
-        {/* Warning threshold line */}
-        {warningLine !== undefined && warningLine >= yMin && warningLine <= yMax && (
-          <>
-            <line
-              x1={padL}
-              x2={w - padR}
-              y1={toY(warningLine)}
-              y2={toY(warningLine)}
-              stroke="#FF9500"
-              strokeWidth={0.8}
-              strokeDasharray="4,3"
-              opacity={0.7}
-            />
-            {warningLabel && (
-              <text x={w - padR - 2} y={toY(warningLine) - 3} textAnchor="end" fill="#FF9500" fontSize={7}>
-                {warningLabel}
-              </text>
-            )}
-          </>
-        )}
-
-        {/* Secondary area fill + line */}
-        {showSecondary && secondary.length > 1 && (
-          <>
-            <path d={buildArea(secondary)} fill={secondaryColor} fillOpacity={0.06} />
-            <path d={buildPath(secondary)} fill="none" stroke={secondaryColor} strokeWidth={1.5} opacity={0.7} />
-          </>
-        )}
-
-        {/* Primary area fill + line */}
-        <path d={buildArea(primary)} fill={color} fillOpacity={0.1} />
-        <path d={buildPath(primary)} fill="none" stroke={color} strokeWidth={2} />
-
-        {/* End dots */}
-        <circle cx={toX(primary.length - 1)} cy={toY(lastVal)} r={3} fill={color} />
-        {showSecondary && secondary.length > 1 && secLastVal !== null && (
-          <circle cx={padL + ((secondary.length - 1) / (secondary.length - 1)) * cw} cy={toY(secLastVal)} r={3} fill={secondaryColor!} />
-        )}
-      </svg>
-    </div>
-  );
-}
+type MetricKey = 'elevation' | 'temperature' | 'soc' | 'power' | 'speed';
 
 export default function ElevationThermalChart({
   routeASegments,
   routeBSegments,
   routeAName,
   routeBName,
+  currentPlaybackIndex,
+  activeRoute = 'A',
+  stallDistanceKm,
+  throttleDistanceKm,
 }: ChartProps) {
-  // Determine ranges for chart axes
-  const allElevations = [...routeASegments, ...routeBSegments].map((s) => s.elevationM);
-  const elevMin = Math.min(...allElevations) - 5;
-  const elevMax = Math.max(...allElevations) + 5;
+  const [selectedMetric, setSelectedMetric] = useState<MetricKey>('elevation');
 
-  const allTemps = [...routeASegments, ...routeBSegments].map((s) => s.packTempC);
-  const tempMin = Math.min(...allTemps, 30) - 2;
-  const tempMax = Math.max(...allTemps, 50) + 2;
+  if (!routeASegments || routeASegments.length < 2) {
+    return (
+      <div className="volt-card p-4 text-center text-slate-500 text-xs">
+        Awaiting route segments to render profile charts...
+      </div>
+    );
+  }
+
+  // Active dataset
+  const activeSegments = activeRoute === 'A' ? routeASegments : routeBSegments;
+  const currentStep = currentPlaybackIndex !== undefined ? Math.min(activeSegments.length - 1, currentPlaybackIndex) : undefined;
+  const currentDistKm = currentStep !== undefined && activeSegments[currentStep] ? activeSegments[currentStep].cumulativeDistanceKm : undefined;
+
+  // Configuration for each metric
+  const metricConfigs = {
+    elevation: {
+      label: 'Elevation Profile',
+      unit: 'm',
+      key: 'elevationM' as keyof SegmentCalculation,
+      colorA: '#EF4444',
+      colorB: '#00F5A0',
+      min: Math.min(...routeASegments.map((s) => s.elevationM), ...(routeBSegments.length ? routeBSegments.map((s) => s.elevationM) : [900])) - 5,
+      max: Math.max(...routeASegments.map((s) => s.elevationM), ...(routeBSegments.length ? routeBSegments.map((s) => s.elevationM) : [920])) + 5,
+      warningVal: undefined as number | undefined,
+      warningLabel: undefined as string | undefined,
+    },
+    temperature: {
+      label: 'Pack Temperature',
+      unit: '°C',
+      key: 'packTempC' as keyof SegmentCalculation,
+      colorA: '#EF4444',
+      colorB: '#00F5A0',
+      min: 30,
+      max: 56,
+      warningVal: 45,
+      warningLabel: 'BMS Derate (45°C)',
+    },
+    soc: {
+      label: 'Battery State of Charge',
+      unit: '%',
+      key: 'socPct' as keyof SegmentCalculation,
+      colorA: '#EF4444',
+      colorB: '#00F5A0',
+      min: 0,
+      max: 100,
+      warningVal: 15,
+      warningLabel: '15% Safety Reserve',
+    },
+    power: {
+      label: 'Power Demand & Regen',
+      unit: 'kW',
+      key: 'powerKw' as keyof SegmentCalculation,
+      colorA: '#EF4444',
+      colorB: '#00D2FF',
+      min: -1.5,
+      max: 4.5,
+      warningVal: 0,
+      warningLabel: 'Regen Baseline (0 kW)',
+    },
+    speed: {
+      label: 'Vehicle Speed Profile',
+      unit: 'km/h',
+      key: 'speedKmh' as keyof SegmentCalculation,
+      colorA: '#EF4444',
+      colorB: '#00F5A0',
+      min: 0,
+      max: 60,
+      warningVal: undefined as number | undefined,
+      warningLabel: undefined as string | undefined,
+    },
+  };
+
+  const activeConf = metricConfigs[selectedMetric];
+
+  // SVG dimensions
+  const w = 320;
+  const h = 100;
+  const padL = 6;
+  const padR = 6;
+  const padT = 8;
+  const padB = 8;
+  const cw = w - padL - padR;
+  const ch = h - padT - padB;
+
+  const maxDistA = routeASegments[routeASegments.length - 1].cumulativeDistanceKm || 1;
+  const maxDistB = routeBSegments.length > 0 ? (routeBSegments[routeBSegments.length - 1].cumulativeDistanceKm || 1) : maxDistA;
+  const maxDist = Math.max(maxDistA, maxDistB);
+
+  const toX = (distKm: number) => padL + (distKm / maxDist) * cw;
+  const toY = (val: number) => {
+    const clamped = Math.max(activeConf.min, Math.min(activeConf.max, val));
+    return padT + ch - ((clamped - activeConf.min) / (activeConf.max - activeConf.min)) * ch;
+  };
+
+  const buildPath = (segments: SegmentCalculation[]) => {
+    if (!segments || segments.length === 0) return '';
+    return segments
+      .map((seg, i) => {
+        const x = toX(seg.cumulativeDistanceKm);
+        const y = toY(Number(seg[activeConf.key]));
+        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+  };
+
+  const pathA = buildPath(routeASegments);
+  const pathB = routeBSegments.length > 0 ? buildPath(routeBSegments) : '';
+
+  const lastValA = Number(routeASegments[routeASegments.length - 1][activeConf.key]);
+  const lastValB = routeBSegments.length > 0 ? Number(routeBSegments[routeBSegments.length - 1][activeConf.key]) : null;
 
   return (
-    <div className="volt-card p-4 space-y-4">
+    <div className="volt-card p-3 space-y-3 bg-[#0B0F19] border-volt-border">
+      {/* Header & Tabs */}
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-white">Route Profile Analytics</span>
-        <div className="flex items-center gap-4 text-[10px]">
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-0.5 bg-red-400 rounded" />
-            <span className="text-slate-400">Route A (Standard)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-0.5 bg-[#00F5A0] rounded" />
-            <span className="text-slate-400">Route B (VoltPath)</span>
-          </div>
+        <span className="text-xs font-bold text-white tracking-wide">
+          Route Analytics
+        </span>
+        <div className="flex items-center gap-2 text-[9px] font-mono">
+          <span className="text-red-400">Route A</span>
+          <span className="text-slate-600">vs</span>
+          <span className="text-[#00F5A0]">Route B</span>
         </div>
       </div>
 
-      {/* Elevation Profile */}
-      <MiniChart
-        data={routeASegments}
-        dataKey="elevationM"
-        color="#EF4444"
-        label="Elevation Profile (m)"
-        unit="m"
-        yMin={elevMin}
-        yMax={elevMax}
-        height={70}
-        showSecondary
-        secondaryData={routeBSegments}
-        secondaryColor="#00F5A0"
-        secondaryLabel="VoltPath"
-      />
+      {/* Metric Selector Tabs */}
+      <div className="flex items-center gap-1 bg-[#121826] p-1 rounded-lg border border-volt-border/70 overflow-x-auto">
+        <button
+          onClick={() => setSelectedMetric('elevation')}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all ${
+            selectedMetric === 'elevation' ? 'bg-[#00F5A0]/20 text-[#00F5A0]' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Mountain className="w-3 h-3" />
+          Elev
+        </button>
+        <button
+          onClick={() => setSelectedMetric('temperature')}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all ${
+            selectedMetric === 'temperature' ? 'bg-orange-500/20 text-orange-400' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Thermometer className="w-3 h-3" />
+          Temp
+        </button>
+        <button
+          onClick={() => setSelectedMetric('soc')}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all ${
+            selectedMetric === 'soc' ? 'bg-[#00F5A0]/20 text-[#00F5A0]' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Battery className="w-3 h-3" />
+          SoC
+        </button>
+        <button
+          onClick={() => setSelectedMetric('power')}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all ${
+            selectedMetric === 'power' ? 'bg-[#00D2FF]/20 text-[#00D2FF]' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Zap className="w-3 h-3" />
+          Power
+        </button>
+        <button
+          onClick={() => setSelectedMetric('speed')}
+          className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all ${
+            selectedMetric === 'speed' ? 'bg-purple-500/20 text-purple-300' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Gauge className="w-3 h-3" />
+          Speed
+        </button>
+      </div>
 
-      {/* Pack Temperature */}
-      <MiniChart
-        data={routeASegments}
-        dataKey="packTempC"
-        color="#EF4444"
-        label="Battery Pack Temperature (°C)"
-        unit="°C"
-        yMin={tempMin}
-        yMax={tempMax}
-        warningLine={45}
-        warningLabel="BMS Throttle 45°C"
-        height={70}
-        showSecondary
-        secondaryData={routeBSegments}
-        secondaryColor="#00F5A0"
-        secondaryLabel="VoltPath"
-      />
+      {/* Active Chart Box */}
+      <div className="bg-[#060A12] border border-volt-border rounded-lg p-2 relative">
+        <div className="flex items-center justify-between text-[10px] mb-1">
+          <span className="text-slate-400 font-mono">
+            {activeConf.label} ({activeConf.unit})
+          </span>
+          <div className="flex items-center gap-3 font-mono">
+            <span className="text-red-400">
+              A: {lastValA.toFixed(1)}{activeConf.unit}
+            </span>
+            {lastValB !== null && (
+              <span className="text-[#00F5A0]">
+                B: {lastValB.toFixed(1)}{activeConf.unit}
+              </span>
+            )}
+          </div>
+        </div>
 
-      {/* SoC Drain Curve */}
-      <MiniChart
-        data={routeASegments}
-        dataKey="socPct"
-        color="#EF4444"
-        label="State of Charge (%)"
-        unit="%"
-        yMin={0}
-        yMax={100}
-        warningLine={15}
-        warningLabel="Deep Discharge 15%"
-        height={70}
-        showSecondary
-        secondaryData={routeBSegments}
-        secondaryColor="#00F5A0"
-        secondaryLabel="VoltPath"
-      />
+        <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-24 overflow-visible">
+          {/* Horizontal Grid */}
+          {[0, 0.5, 1].map((frac) => (
+            <line
+              key={frac}
+              x1={padL}
+              x2={w - padR}
+              y1={padT + ch * frac}
+              y2={padT + ch * frac}
+              stroke="#1E293B"
+              strokeWidth={0.5}
+            />
+          ))}
+
+          {/* Warning / Throttle / Stall Threshold Line */}
+          {activeConf.warningVal !== undefined && (
+            <>
+              <line
+                x1={padL}
+                x2={w - padR}
+                y1={toY(activeConf.warningVal)}
+                y2={toY(activeConf.warningVal)}
+                stroke="#F59E0B"
+                strokeWidth={0.8}
+                strokeDasharray="4,3"
+                opacity={0.8}
+              />
+              {activeConf.warningLabel && (
+                <text
+                  x={w - padR}
+                  y={toY(activeConf.warningVal) - 2}
+                  textAnchor="end"
+                  fill="#F59E0B"
+                  fontSize={7}
+                  className="font-mono"
+                >
+                  {activeConf.warningLabel}
+                </text>
+              )}
+            </>
+          )}
+
+          {/* Route A Path (Red) */}
+          <path
+            d={pathA}
+            fill="none"
+            stroke={activeConf.colorA}
+            strokeWidth={1.8}
+            opacity={activeRoute === 'A' ? 1.0 : 0.6}
+          />
+
+          {/* Route B Path (Green/Teal) */}
+          {pathB && (
+            <path
+              d={pathB}
+              fill="none"
+              stroke={activeConf.colorB}
+              strokeWidth={1.8}
+              opacity={activeRoute === 'B' ? 1.0 : 0.6}
+            />
+          )}
+
+          {/* Stall Point Marker on Chart */}
+          {stallDistanceKm !== undefined && stallDistanceKm <= maxDist && (
+            <g transform={`translate(${toX(stallDistanceKm)}, ${toY(activeConf.min + (activeConf.max - activeConf.min) * 0.7)})`}>
+              <line y1={-25} y2={25} stroke="#EF4444" strokeWidth={1} strokeDasharray="2,2" />
+              <circle r={3} fill="#EF4444" />
+            </g>
+          )}
+
+          {/* Current Simulation Playhead */}
+          {currentDistKm !== undefined && (
+            <g transform={`translate(${toX(currentDistKm)}, 0)`}>
+              <line y1={padT} y2={h - padB} stroke="#00D2FF" strokeWidth={1.2} />
+              <circle
+                cx={0}
+                cy={toY(Number(activeSegments[currentStep || 0]?.[activeConf.key] || 0))}
+                r={3.5}
+                fill="#00D2FF"
+                stroke="#060A12"
+                strokeWidth={1.5}
+              />
+            </g>
+          )}
+        </svg>
+
+        {/* X-axis distance labels */}
+        <div className="flex justify-between text-[8px] font-mono text-slate-500 mt-1">
+          <span>0.0 km</span>
+          <span>{(maxDist / 2).toFixed(1)} km</span>
+          <span>{maxDist.toFixed(1)} km</span>
+        </div>
+      </div>
     </div>
   );
 }

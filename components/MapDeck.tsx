@@ -21,6 +21,7 @@ interface MapDeckProps {
   showIsochrone: boolean;
   fullPolylineA?: [number, number][];
   fullPolylineB?: [number, number][];
+  corridorTitle?: string;
 }
 
 export default function MapDeck({
@@ -38,6 +39,7 @@ export default function MapDeck({
   showIsochrone,
   fullPolylineA,
   fullPolylineB,
+  corridorTitle,
 }: MapDeckProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -447,7 +449,7 @@ export default function MapDeck({
       <div className="absolute top-3 left-3 flex flex-col gap-1 z-10">
         <div className="bg-[#0A0E17]/90 border border-volt-border rounded-lg px-2.5 py-1 text-[10px] text-slate-300 backdrop-blur-sm flex items-center gap-1.5 font-mono">
           <span className="w-2 h-2 rounded-full bg-[#00F5A0] animate-pulse"></span>
-          BENGALURU CORRIDOR • INDIRANAGAR ➔ BELLANDUR
+          {corridorTitle || 'URBAN LOGISTICS CORRIDOR'}
         </div>
       </div>
     </div>

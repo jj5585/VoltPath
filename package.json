@@ -6,7 +6,9 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:build": "tsc lib/physicsEngine.ts lib/ais140Generator.ts lib/mapRoutingService.ts --outDir ./tests-build --module es2022 --target es2022 --moduleResolution node && echo '{\"type\":\"module\"}' > ./tests-build/package.json",
+    "test": "npm run test:build && node --test tests/run-tests.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
